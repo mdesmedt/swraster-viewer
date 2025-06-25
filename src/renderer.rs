@@ -857,8 +857,11 @@ impl Renderer {
         let ndc = Vec2::new(vertex.x / vertex.w, vertex.y / vertex.w);
 
         // Convert to screen coordinates
-        let screen_x = ((ndc.x + 1.0) * self.width as f32 / 2.0) as i32;
-        let screen_y = ((1.0 - ndc.y) * self.height as f32 / 2.0) as i32;
+        let screen_x_f = (ndc.x + 1.0) * self.width as f32 / 2.0;
+        let screen_y_f = (1.0 - ndc.y) * self.height as f32 / 2.0;
+        // Round to nearest integer
+        let screen_x = screen_x_f.round() as i32;
+        let screen_y = screen_y_f.round() as i32;
 
         IVec2::new(screen_x, screen_y)
     }
