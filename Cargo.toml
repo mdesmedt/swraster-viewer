@@ -1,0 +1,12 @@
+[package]
+name = "swrast"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+minifb = "0.28"
+glam = "0.30.3"
+gltf = "1.4.1"
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.15"
+rayon = "1.10.0"
