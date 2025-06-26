@@ -62,7 +62,7 @@ impl ClipVertex {
 struct RasterPacket {
     screen_min: IVec2,
     screen_max: IVec2,
-    pos_screen: [IVec2; 3],
+    pos_screen: [Vec2; 3],
     z_over_w: [f32; 3],
     normal_over_w: [Vec3; 3],
     one_over_w: [f32; 3],
@@ -192,10 +192,10 @@ impl TileRasterizer {
         let light_y = Vec4::splat(light.normal.y);
         let light_z = Vec4::splat(light.normal.z);
 
-        // Get triangle vertices in screen space and convert to float
-        let p0 = Vec2::new(packet.pos_screen[0].x as f32, packet.pos_screen[0].y as f32);
-        let p1 = Vec2::new(packet.pos_screen[1].x as f32, packet.pos_screen[1].y as f32);
-        let p2 = Vec2::new(packet.pos_screen[2].x as f32, packet.pos_screen[2].y as f32);
+        // Get triangle vertices in screen space
+        let p0 = packet.pos_screen[0];
+        let p1 = packet.pos_screen[1];
+        let p2 = packet.pos_screen[2];
 
         // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
@@ -769,7 +769,7 @@ impl Renderer {
         let signed_area = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
 
         // Backface culling
-        if signed_area >= 0 {
+        if signed_area > 0.0 {
             return;
         }
 
@@ -794,13 +794,13 @@ impl Renderer {
         ];
 
         // Compute triangle bounding box
-        let screen_min = IVec2::new(
-            p0.x.min(p1.x).min(p2.x).max(0),
-            p0.y.min(p1.y).min(p2.y).max(0),
+        let screen_min: IVec2 = IVec2::new(
+            p0.x.min(p1.x).min(p2.x).max(0.0).floor() as i32,
+            p0.y.min(p1.y).min(p2.y).max(0.0).floor() as i32,
         );
-        let screen_max = IVec2::new(
-            p0.x.max(p1.x).max(p2.x).min(self.width),
-            p0.y.max(p1.y).max(p2.y).min(self.height),
+        let screen_max: IVec2 = IVec2::new(
+            p0.x.max(p1.x).max(p2.x).min(self.width as f32).ceil() as i32,
+            p0.y.max(p1.y).max(p2.y).min(self.height as f32).ceil() as i32,
         );
 
         // Calculate which bins intersect with the triangle's bounding box
@@ -852,17 +852,14 @@ impl Renderer {
     }
 
     // Computes the 2D screen positions for a clip space vertex
-    fn clip_to_screen(&self, vertex: Vec4) -> IVec2 {
+    fn clip_to_screen(&self, vertex: Vec4) -> Vec2 {
         // Perform perspective divide
         let ndc = Vec2::new(vertex.x / vertex.w, vertex.y / vertex.w);
 
         // Convert to screen coordinates
-        let screen_x_f = (ndc.x + 1.0) * self.width as f32 / 2.0;
-        let screen_y_f = (1.0 - ndc.y) * self.height as f32 / 2.0;
-        // Round to nearest integer
-        let screen_x = screen_x_f.round() as i32;
-        let screen_y = screen_y_f.round() as i32;
+        let screen_x = (ndc.x + 1.0) * self.width as f32 / 2.0;
+        let screen_y = (1.0 - ndc.y) * self.height as f32 / 2.0;
 
-        IVec2::new(screen_x, screen_y)
+        Vec2::new(screen_x, screen_y)
     }
 }
