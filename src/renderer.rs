@@ -87,6 +87,16 @@ impl RenderBuffer {
     pub fn pixels(&self) -> &[u32] {
         &self.pixels
     }
+
+    pub fn clear(&mut self) {
+        self.pixels.fill(0); // Clear to black
+    }
+
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
+        if x < self.width && y < self.height {
+            self.pixels[y * self.width + x] = color;
+        }
+    }
 }
 
 // The tile which the binner uses to send work

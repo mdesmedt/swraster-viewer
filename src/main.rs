@@ -1,7 +1,10 @@
+use core::num;
 use glam::{Vec3, Vec3A};
 use minifb::{Key, MouseButton, Window, WindowOptions};
 use std::env;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
 mod rendercamera;
@@ -20,6 +23,11 @@ const HEIGHT: usize = 720;
 const CAMERA_SPEED: f32 = 2.0; // Units per second
 const CAMERA_SPEED_FAST: f32 = 20.0; // Units per second when shift is pressed
 
+struct RenderState {
+    scene: Scene,
+    camera: RenderCamera,
+}
+
 fn main() {
     // Get the GLTF file path from command line arguments or use default
     let args: Vec<String> = env::args().collect();
@@ -30,33 +38,8 @@ fn main() {
         Path::new("glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")
     };
 
-    // Load the GLTF file
-    let (document, buffers, _) = gltf::import(gltf_path).expect("Failed to load GLTF file");
-
-    // Get the default scene or first scene
-    let gltf_scene = document
-        .default_scene()
-        .or_else(|| document.scenes().next())
-        .expect("No scenes found in GLTF file");
-
-    let scene = Scene::from_gltf(&document, &gltf_scene, &buffers)
-        .expect("Failed to create scene from GLTF");
-
-    // Print scene statistics
-    let total_triangles: usize = scene
-        .meshes
-        .iter()
-        .map(|mesh| {
-            mesh.primitives
-                .iter()
-                .map(|primitive| primitive.indices.len() / 3)
-                .sum::<usize>()
-        })
-        .sum();
-    println!("Scene Statistics:");
-    println!("  Nodes: {}", scene.nodes.len());
-    println!("  Meshes: {}", scene.meshes.len());
-    println!("  Total Triangles: {}", total_triangles);
+    // Save the start time
+    let start_time = Instant::now();
 
     // Create the renderer
     let mut renderer = Renderer::new(WIDTH as i32, HEIGHT as i32);
@@ -64,7 +47,7 @@ fn main() {
     // Create the window and buffer
     let mut buffer = RenderBuffer::new(WIDTH, HEIGHT);
     let mut window = Window::new(
-        "GLTF Viewer - ESC to exit",
+        "GLTF Viewer - Loading... - ESC to exit",
         WIDTH,
         HEIGHT,
         WindowOptions::default(),
@@ -76,28 +59,70 @@ fn main() {
     // Limit to max ~60 fps update rate
     window.set_target_fps(60);
 
-    // Compute scene bounds and set up camera to look at center
-    let bounds = compute_scene_bounds(&scene);
-    let scene_center = (bounds.min + bounds.max) * 0.5;
-    let scene_size = (bounds.max - bounds.min).length();
+    // Create shared state for background loading
+    let render_state = Arc::new(Mutex::new(None::<RenderState>));
+    let render_state_loading = render_state.clone();
 
-    // Create a default camera if none exists in the file
-    let mut camera = if let Some(camera) = document.cameras().next() {
-        RenderCamera::from_gltf(&camera, WIDTH as f32, HEIGHT as f32)
-            .expect("Failed to create camera from GLTF")
-    } else {
-        // Position camera at a distance proportional to scene size
-        let camera_distance = scene_size * 2.0;
-        let camera_pos = scene_center + Vec3A::new(0.0, 0.0, camera_distance);
+    // Start background thread for scene loading
+    let gltf_path = gltf_path.to_path_buf(); // Clone the path for the thread
+    thread::spawn(move || {
+        // Load the GLTF file
+        let (document, buffers, _) = gltf::import(&gltf_path).expect("Failed to load GLTF file");
 
-        RenderCamera::new(
-            Vec3::from(camera_pos),
-            Vec3::from(scene_center),
-            std::f32::consts::PI / 4.0,
-            WIDTH as f32,
-            HEIGHT as f32,
-        )
-    };
+        // Get the default scene or first scene
+        let gltf_scene = document
+            .default_scene()
+            .or_else(|| document.scenes().next())
+            .expect("No scenes found in GLTF file");
+
+        let scene = Scene::from_gltf(&document, &gltf_scene, &buffers)
+            .expect("Failed to create scene from GLTF");
+
+        // Print scene statistics
+        let total_triangles: usize = scene
+            .meshes
+            .iter()
+            .map(|mesh| {
+                mesh.primitives
+                    .iter()
+                    .map(|primitive| primitive.indices.len() / 3)
+                    .sum::<usize>()
+            })
+            .sum();
+        println!("Scene Statistics:");
+        println!("  Nodes: {}", scene.nodes.len());
+        println!("  Meshes: {}", scene.meshes.len());
+        println!("  Total Triangles: {}", total_triangles);
+
+        // Compute scene bounds and set up camera to look at center
+        let bounds = compute_scene_bounds(&scene);
+        let scene_center = (bounds.min + bounds.max) * 0.5;
+        let scene_size = (bounds.max - bounds.min).length();
+
+        // Create a default camera if none exists in the file
+        let camera = if let Some(camera) = document.cameras().next() {
+            RenderCamera::from_gltf(&camera, WIDTH as f32, HEIGHT as f32)
+                .expect("Failed to create camera from GLTF")
+        } else {
+            // Position camera at a distance proportional to scene size
+            let camera_distance = scene_size * 2.0;
+            let camera_pos = scene_center + Vec3A::new(0.0, 0.0, camera_distance);
+
+            RenderCamera::new(
+                Vec3::from(camera_pos),
+                Vec3::from(scene_center),
+                std::f32::consts::PI / 4.0,
+                WIDTH as f32,
+                HEIGHT as f32,
+            )
+        };
+
+        // Create and store the render state
+        let render_state = RenderState { scene, camera };
+        if let Ok(mut state) = render_state_loading.lock() {
+            *state = Some(render_state);
+        }
+    });
 
     // Mouse state for rotation
     let mut is_dragging = false;
@@ -114,59 +139,94 @@ fn main() {
         let delta_time = current_time.duration_since(last_frame_time).as_secs_f32();
         last_frame_time = current_time;
 
-        // Handle keyboard input for camera movement
-        let mut move_dir = Vec3::ZERO;
+        // Try to get the render state
+        let mut render_state_guard = render_state.lock().unwrap();
 
-        if window.is_key_down(Key::W) {
-            move_dir.z -= 1.0; // Forward (negative Z in camera space)
-        }
-        if window.is_key_down(Key::S) {
-            move_dir.z += 1.0; // Backward (positive Z in camera space)
-        }
-        if window.is_key_down(Key::A) {
-            move_dir.x -= 1.0; // Left (negative X in camera space)
-        }
-        if window.is_key_down(Key::D) {
-            move_dir.x += 1.0; // Right (positive X in camera space)
-        }
-        if window.is_key_down(Key::E) {
-            move_dir.y += 1.0; // Up (positive Y in camera space)
-        }
-        if window.is_key_down(Key::Q) {
-            move_dir.y -= 1.0; // Down (negative Y in camera space)
-        }
+        if let Some(ref mut render_state) = *render_state_guard {
+            // Scene is loaded, handle input and render
+            let camera = &mut render_state.camera;
 
-        // Normalize movement direction if moving diagonally
-        if move_dir.length_squared() > 0.0 {
-            move_dir = move_dir.normalize();
-            // Use faster speed when shift is pressed
-            let speed = if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift)
-            {
-                CAMERA_SPEED_FAST
-            } else {
-                CAMERA_SPEED
-            };
-            camera.move_relative(move_dir, speed * delta_time);
-        }
+            // Handle keyboard input for camera movement
+            let mut move_dir = Vec3::ZERO;
 
-        // Handle mouse input for camera rotation
-        if window.get_mouse_down(MouseButton::Left) {
-            if let Some((x, y)) = window.get_mouse_pos(minifb::MouseMode::Discard) {
-                if !is_dragging {
-                    is_dragging = true;
-                } else {
-                    let dx = x - last_mouse_pos.0;
-                    let dy = y - last_mouse_pos.1;
-                    camera.rotate_mouse(dx, dy);
-                }
-                last_mouse_pos = (x, y);
+            if window.is_key_down(Key::W) {
+                move_dir.z -= 1.0; // Forward (negative Z in camera space)
             }
+            if window.is_key_down(Key::S) {
+                move_dir.z += 1.0; // Backward (positive Z in camera space)
+            }
+            if window.is_key_down(Key::A) {
+                move_dir.x -= 1.0; // Left (negative X in camera space)
+            }
+            if window.is_key_down(Key::D) {
+                move_dir.x += 1.0; // Right (positive X in camera space)
+            }
+            if window.is_key_down(Key::E) {
+                move_dir.y += 1.0; // Up (positive Y in camera space)
+            }
+            if window.is_key_down(Key::Q) {
+                move_dir.y -= 1.0; // Down (negative Y in camera space)
+            }
+
+            // Normalize movement direction if moving diagonally
+            if move_dir.length_squared() > 0.0 {
+                move_dir = move_dir.normalize();
+                // Use faster speed when shift is pressed
+                let speed =
+                    if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift) {
+                        CAMERA_SPEED_FAST
+                    } else {
+                        CAMERA_SPEED
+                    };
+                camera.move_relative(move_dir, speed * delta_time);
+            }
+
+            // Handle mouse input for camera rotation
+            if window.get_mouse_down(MouseButton::Left) {
+                if let Some((x, y)) = window.get_mouse_pos(minifb::MouseMode::Discard) {
+                    if !is_dragging {
+                        is_dragging = true;
+                    } else {
+                        let dx = x - last_mouse_pos.0;
+                        let dy = y - last_mouse_pos.1;
+                        camera.rotate_mouse(dx, dy);
+                    }
+                    last_mouse_pos = (x, y);
+                }
+            } else {
+                is_dragging = false;
+            }
+
+            // Render the scene
+            renderer.render_scene(&render_state.scene, camera, &mut buffer);
         } else {
-            is_dragging = false;
+            // Scene is still loading, show loading screen
+            buffer.clear();
+
+            // Quaint little loading indicator
+            let center_x = WIDTH as i32 / 2;
+            let center_y = HEIGHT as i32 / 2;
+            let radius = 50;
+            let time = current_time.duration_since(start_time).as_secs_f64();
+            let angle = time * 2.0 * std::f64::consts::PI; // One rotation per second
+            const NUM_POINTS: usize = 32;
+            const ANGLE_STEP: f64 = (std::f64::consts::PI * 0.5) / NUM_POINTS as f64;
+            for i in 0..NUM_POINTS {
+                let point_angle = (i as f64 * ANGLE_STEP) + angle;
+                let x = center_x as i32 + (point_angle.cos() * radius as f64) as i32;
+                let y = center_y as i32 + (point_angle.sin() * radius as f64) as i32;
+                let px = x as usize;
+                let py = y as usize;
+                let intensity = i as f64 / NUM_POINTS as f64;
+                let intensity_int = (intensity * 255.0) as u32;
+                let color =
+                    intensity_int << 24 | intensity_int << 16 | intensity_int << 8 | intensity_int;
+                buffer.set_pixel(px, py, color);
+            }
         }
 
-        // Render the scene
-        renderer.render_scene(&scene, &camera, &mut buffer);
+        // Drop the guard before updating the window
+        drop(render_state_guard);
 
         // Update the window
         window
