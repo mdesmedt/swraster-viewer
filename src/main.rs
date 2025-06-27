@@ -105,7 +105,7 @@ fn main() {
                 .expect("Failed to create camera from GLTF")
         } else {
             // Position camera at a distance proportional to scene size
-            let camera_distance = scene_size * 2.0;
+            let camera_distance = scene_size;
             let camera_pos = scene_center + Vec3A::new(0.0, 0.0, camera_distance);
 
             RenderCamera::new(
