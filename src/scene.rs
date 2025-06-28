@@ -78,6 +78,7 @@ pub struct Texture {
     pub uri: Option<String>,
     pub width: u32,
     pub height: u32,
+    pub data: Vec<u8>, // RGBA8 data
 }
 
 #[derive(Debug)]
@@ -381,7 +382,79 @@ impl Texture {
             gltf::image::Source::View { .. } => (None, 0, 0),
         };
 
-        Ok(Texture { uri, width, height })
+        Ok(Texture { uri, width, height, data: Vec::new() })
+    }
+
+    pub fn sample(&self, uv: Vec2) -> Vec4 {
+        if self.data.is_empty() {
+            return Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for missing texture
+        }
+
+        // Clamp UV coordinates to [0, 1]
+        let u = uv.x.clamp(0.0, 1.0);
+        let v = uv.y.clamp(0.0, 1.0);
+
+        // Convert to pixel coordinates
+        let x = (u * (self.width - 1) as f32) as u32;
+        let y = (v * (self.height - 1) as f32) as u32;
+
+        // Get pixel index
+        let pixel_index = ((y * self.width + x) * 4) as usize;
+        
+        if pixel_index + 3 >= self.data.len() {
+            return Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
+        }
+
+        // Read RGBA values and convert to float [0, 1]
+        let r = self.data[pixel_index] as f32 / 255.0;
+        let g = self.data[pixel_index + 1] as f32 / 255.0;
+        let b = self.data[pixel_index + 2] as f32 / 255.0;
+        let a = self.data[pixel_index + 3] as f32 / 255.0;
+
+        Vec4::new(r, g, b, a)
+    }
+
+    pub fn sample_vec4(&self, u_vec: Vec4, v_vec: Vec4) -> [Vec4; 4] {
+        if self.data.is_empty() {
+            // Return magenta for missing texture
+            let magenta = Vec4::new(1.0, 0.0, 1.0, 1.0);
+            return [magenta, magenta, magenta, magenta];
+        }
+
+        // Sample four pixels
+        let mut pixels = [Vec4::ZERO; 4];
+        
+        for i in 0..4 {
+            let u = u_vec[i].clamp(0.0, 1.0);
+            let v = v_vec[i].clamp(0.0, 1.0);
+            
+            // Convert to pixel coordinates
+            let x = (u * (self.width - 1) as f32) as u32;
+            let y = (v * (self.height - 1) as f32) as u32;
+            
+            // Get pixel index
+            let pixel_index = ((y * self.width + x) * 4) as usize;
+            
+            if pixel_index + 3 >= self.data.len() {
+                pixels[i] = Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
+            } else {
+                // Read RGBA values and convert to float [0, 1]
+                let r = self.data[pixel_index] as f32 / 255.0;
+                let g = self.data[pixel_index + 1] as f32 / 255.0;
+                let b = self.data[pixel_index + 2] as f32 / 255.0;
+                let a = self.data[pixel_index + 3] as f32 / 255.0;
+                
+                pixels[i] = Vec4::new(r, g, b, a);
+            }
+        }
+        
+        // Rearrange into [reds, greens, blues, alphas] format
+        [
+            Vec4::new(pixels[0].x, pixels[1].x, pixels[2].x, pixels[3].x), // All reds
+            Vec4::new(pixels[0].y, pixels[1].y, pixels[2].y, pixels[3].y), // All greens
+            Vec4::new(pixels[0].z, pixels[1].z, pixels[2].z, pixels[3].z), // All blues
+            Vec4::new(pixels[0].w, pixels[1].w, pixels[2].w, pixels[3].w), // All alphas
+        ]
     }
 }
 
@@ -500,12 +573,21 @@ pub fn compute_scene_bounds(scene: &Scene) -> SceneBounds {
 #[derive(Debug)]
 pub struct TextureCache {
     textures: HashMap<String, Arc<Texture>>,
+    base_dir: Option<String>,
 }
 
 impl TextureCache {
     pub fn new() -> Self {
         Self {
             textures: HashMap::new(),
+            base_dir: None,
+        }
+    }
+
+    pub fn with_base_dir(base_dir: String) -> Self {
+        Self {
+            textures: HashMap::new(),
+            base_dir: Some(base_dir),
         }
     }
 
@@ -513,13 +595,83 @@ impl TextureCache {
         if let Some(texture) = self.textures.get(uri) {
             Arc::clone(texture)
         } else {
-            let texture = Arc::new(Texture {
-                uri: Some(uri.to_string()),
-                width: 0,  // TODO: Load actual texture dimensions
-                height: 0, // TODO: Load actual texture dimensions
-            });
+            // Load the texture from file
+            let texture = match self.load_texture(uri) {
+                Ok(tex) => Arc::new(tex),
+                Err(e) => {
+                    eprintln!("Failed to load texture '{}': {}", uri, e);
+                    // Create a fallback texture (checkerboard pattern)
+                    Arc::new(self.create_fallback_texture())
+                }
+            };
             self.textures.insert(uri.to_string(), Arc::clone(&texture));
             texture
         }
+    }
+
+    fn load_texture(&self, uri: &str) -> SceneResult<Texture> {
+        // Construct the full path based on GLTF spec
+        let texture_path = if let Some(ref base_dir) = self.base_dir {
+            // If URI is absolute (starts with http://, https://, or file://), use as-is
+            if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("file://") {
+                uri.to_string()
+            } else {
+                // Otherwise, make it relative to the base directory
+                format!("{}/{}", base_dir, uri)
+            }
+        } else {
+            // No base directory, try URI as-is
+            uri.to_string()
+        };
+
+        // Try to load the texture
+        match image::open(&texture_path) {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let data = rgba.into_raw();
+                
+                Ok(Texture {
+                    uri: Some(uri.to_string()),
+                    width,
+                    height,
+                    data,
+                })
+            }
+            Err(e) => Err(SceneError::MissingData(format!(
+                "Could not load texture '{}' from path '{}': {}", 
+                uri, texture_path, e
+            ))),
+        }
+    }
+
+    fn create_fallback_texture(&self) -> Texture {
+        // Create a simple checkerboard pattern as fallback
+        let width = 64;
+        let height = 64;
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        
+        for y in 0..height {
+            for x in 0..width {
+                let is_checker = ((x / 8) + (y / 8)) % 2 == 0;
+                let color = if is_checker { 255 } else { 128 };
+                data.extend_from_slice(&[color, color, color, 255]);
+            }
+        }
+        
+        Texture {
+            uri: None,
+            width,
+            height,
+            data,
+        }
+    }
+
+    pub fn unique_texture_count(&self) -> usize {
+        self.textures.len()
+    }
+
+    pub fn total_texture_data_size(&self) -> usize {
+        self.textures.values().map(|texture| texture.data.len()).sum()
     }
 }

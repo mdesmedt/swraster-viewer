@@ -1,5 +1,5 @@
 use crate::rendercamera::RenderCamera;
-use crate::scene::{Node, Scene};
+use crate::scene::{Material, Node, Scene};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use glam::{BVec4, BVec4A, IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
@@ -64,9 +64,11 @@ struct RasterPacket {
     screen_max: IVec2,
     pos_screen: [Vec2; 3],
     z_over_w: [f32; 3],
-    normal_over_w: [Vec3; 3],
     one_over_w: [f32; 3],
     one_over_area_vec: Vec4,
+    normal_over_w: [Vec3; 3],
+    uv_over_w: [Vec2; 3],
+    primitive_index: usize,
     mesh_index: usize,
 }
 
@@ -202,6 +204,13 @@ impl TileRasterizer {
         let light_y = Vec4::splat(light.normal.y);
         let light_z = Vec4::splat(light.normal.z);
 
+        // Fetch the material
+        let primitive_index = packet.primitive_index;
+        let mesh_index = packet.mesh_index;
+        let mesh = &scene.meshes[mesh_index];
+        let material_index = mesh.primitives[primitive_index].material_index;
+        let material: Option<&Material> = scene.materials.get(material_index.unwrap());
+
         // Get triangle vertices in screen space
         let p0 = packet.pos_screen[0];
         let p1 = packet.pos_screen[1];
@@ -275,6 +284,7 @@ impl TileRasterizer {
                         light_y,
                         light_z,
                         &packet,
+                        material,
                     );
                 }
 
@@ -305,6 +315,7 @@ impl TileRasterizer {
         light_y: Vec4,
         light_z: Vec4,
         packet: &RasterPacket,
+        material: Option<&Material>,
     ) {
         // Compute the barycentrics
         let bary0: Vec4 = w0 * packet.one_over_area_vec;
@@ -371,6 +382,7 @@ impl TileRasterizer {
 
         // "Pixel shader" which computes color values for the 4 pixels
 
+        // Compute normal
         let length_squared = normal_x * normal_x + normal_y * normal_y + normal_z * normal_z;
         let length = Vec4::new(
             length_squared.x.sqrt(),
@@ -381,13 +393,53 @@ impl TileRasterizer {
         let normalized_x = normal_x / length;
         let normalized_y = normal_y / length;
         let normalized_z = normal_z / length;
+
+        // Apply N.L lighting
         let dot_x = normalized_x * light_x;
         let dot_y = normalized_y * light_y;
         let dot_z = normalized_z * light_z;
         let light_intensity = dot_x + dot_y + dot_z;
-        let color_r = light_intensity;
-        let color_g = light_intensity;
-        let color_b = light_intensity;
+
+        // Start the color with irradiance, currently monochrome
+        let mut color_r = light_intensity;
+        let mut color_g = light_intensity;
+        let mut color_b = light_intensity;
+
+        if let Some(material) = material {
+            // Apply base color factor
+            color_r *= material.base_color_factor.x;
+            color_g *= material.base_color_factor.y;
+            color_b *= material.base_color_factor.z;
+            // If we have a base texture, sample it
+            if let Some(diffuse_texture) = &material.base_color_texture {
+                // Interpolate UVs
+                let uv_x = interpolate_vertex_attribute(
+                    packet.uv_over_w[0].x,
+                    packet.uv_over_w[1].x,
+                    packet.uv_over_w[2].x,
+                    bary0,
+                    bary1,
+                    bary2,
+                ) * w;
+                let uv_y = interpolate_vertex_attribute(
+                    packet.uv_over_w[0].y,
+                    packet.uv_over_w[1].y,
+                    packet.uv_over_w[2].y,
+                    bary0,
+                    bary1,
+                    bary2,
+                ) * w;
+
+                // Sample base texture for each pixel
+                let diffuse_vec = diffuse_texture.sample_vec4(uv_x, uv_y);
+                color_r *= diffuse_vec[0];
+                color_g *= diffuse_vec[1];
+                color_b *= diffuse_vec[2];
+            }
+        }
+        else {
+            // TODO: Handle missing material
+        }
 
         // Pack colors into integers
 
@@ -803,6 +855,12 @@ impl Renderer {
             triangle.v2.normal / w2,
         ];
 
+        let uv_over_w = [
+            triangle.v0.texcoords / w0,
+            triangle.v1.texcoords / w1,
+            triangle.v2.texcoords / w2,
+        ];
+
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(
             p0.x.min(p1.x).min(p2.x).max(0.0).floor() as i32,
@@ -849,8 +907,10 @@ impl Renderer {
                             screen_max: tile_clipped_max,
                             pos_screen: [p0, p1, p2],
                             z_over_w: z_over_w,
-                            normal_over_w: normal_over_w,
                             one_over_w: one_over_w,
+                            normal_over_w: normal_over_w,
+                            uv_over_w: uv_over_w,
+                            primitive_index: triangle.primitive_index,
                             mesh_index: triangle.mesh_index,
                             one_over_area_vec: Vec4::splat(1.0 / signed_area as f32),
                         };

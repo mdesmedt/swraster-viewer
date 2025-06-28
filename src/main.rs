@@ -75,8 +75,15 @@ fn main() {
             .or_else(|| document.scenes().next())
             .expect("No scenes found in GLTF file");
 
-        // Create texture cache for the scene
-        let mut texture_cache = TextureCache::new();
+        // Extract base directory from GLTF file path for texture loading
+        let base_dir = gltf_path
+            .parent()
+            .and_then(|p| p.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| ".".to_string());
+
+        // Create texture cache for the scene with the correct base directory
+        let mut texture_cache = TextureCache::with_base_dir(base_dir);
         let scene = Scene::from_gltf_with_cache(&document, &gltf_scene, &buffers, &mut texture_cache)
             .expect("Failed to create scene from GLTF");
 
@@ -91,10 +98,17 @@ fn main() {
                     .sum::<usize>()
             })
             .sum();
+        
+        // Calculate texture statistics
+        let unique_textures = texture_cache.unique_texture_count();
+        let total_texture_data_mib = (texture_cache.total_texture_data_size() as f64) / (1024.0 * 1024.0);
+        
         println!("Scene Statistics:");
         println!("  Nodes: {}", scene.nodes.len());
         println!("  Meshes: {}", scene.meshes.len());
         println!("  Total Triangles: {}", total_triangles);
+        println!("  Unique Textures: {}", unique_textures);
+        println!("  Total Texture Data: {:.2} MiB", total_texture_data_mib);
 
         // Compute scene bounds and set up camera to look at center
         let bounds = compute_scene_bounds(&scene);
