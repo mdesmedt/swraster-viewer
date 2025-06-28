@@ -704,11 +704,19 @@ impl TextureCache {
                 let (width, height) = rgba.dimensions();
                 let data = rgba.into_raw();
 
+                // Gamma correct texture data on load instead of during sampling
+                // Use gamma 2.0 instead of 2.2 for perf (we can use sqrt later)
+                let gamma = 2.0;
+                let gamma_corrected = data
+                    .into_iter()
+                    .map(|x| ((x as f32 / 255.0).powf(gamma) * 255.0) as u8)
+                    .collect::<Vec<_>>();
+
                 Ok(Texture {
                     uri: Some(uri.to_string()),
                     width,
                     height,
-                    data,
+                    data: gamma_corrected,
                 })
             }
             Err(e) => Err(SceneError::MissingData(format!(

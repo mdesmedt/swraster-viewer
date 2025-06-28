@@ -455,6 +455,21 @@ impl TileRasterizer {
         color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
         color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
+        fn linear_to_srgb(color: Vec4) -> Vec4 {
+            // Apply gamma 2.0 instead of 2.2 for perf
+            Vec4::new(
+                color.x.sqrt(),
+                color.y.sqrt(),
+                color.z.sqrt(),
+                color.w.sqrt(),
+            )
+        }
+
+        // Gamma correct the final colors before packing
+        color_r = linear_to_srgb(color_r);
+        color_g = linear_to_srgb(color_g);
+        color_b = linear_to_srgb(color_b);
+
         // Pack colors into integers
         let packed_colors = UVec4::new(
             ((color_r.x * 255.0) as u32) << 16
