@@ -1,4 +1,3 @@
-use core::num;
 use glam::{Vec3, Vec3A};
 use minifb::{Key, MouseButton, Window, WindowOptions};
 use std::env;
@@ -16,7 +15,7 @@ mod scene;
 
 use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
-use scene::{compute_scene_bounds, Scene};
+use scene::{compute_scene_bounds, Scene, TextureCache};
 
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
@@ -26,6 +25,7 @@ const CAMERA_SPEED_FAST: f32 = 20.0; // Units per second when shift is pressed
 struct RenderState {
     scene: Scene,
     camera: RenderCamera,
+    texture_cache: TextureCache,
 }
 
 fn main() {
@@ -75,7 +75,9 @@ fn main() {
             .or_else(|| document.scenes().next())
             .expect("No scenes found in GLTF file");
 
-        let scene = Scene::from_gltf(&document, &gltf_scene, &buffers)
+        // Create texture cache for the scene
+        let mut texture_cache = TextureCache::new();
+        let scene = Scene::from_gltf_with_cache(&document, &gltf_scene, &buffers, &mut texture_cache)
             .expect("Failed to create scene from GLTF");
 
         // Print scene statistics
@@ -118,7 +120,7 @@ fn main() {
         };
 
         // Create and store the render state
-        let render_state = RenderState { scene, camera };
+        let render_state = RenderState { scene, camera, texture_cache };
         if let Ok(mut state) = render_state_loading.lock() {
             *state = Some(render_state);
         }

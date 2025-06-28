@@ -2,6 +2,7 @@ use glam::{Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum SceneError {
@@ -62,14 +63,14 @@ pub struct Primitive {
 pub struct Material {
     pub name: Option<String>,
     pub base_color_factor: Vec4,
-    pub base_color_texture: Option<Texture>,
+    pub base_color_texture: Option<Arc<Texture>>,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
-    pub metallic_roughness_texture: Option<Texture>,
-    pub normal_texture: Option<Texture>,
+    pub metallic_roughness_texture: Option<Arc<Texture>>,
+    pub normal_texture: Option<Arc<Texture>>,
     pub emissive_factor: Vec3,
-    pub emissive_texture: Option<Texture>,
-    pub occlusion_texture: Option<Texture>,
+    pub emissive_texture: Option<Arc<Texture>>,
+    pub occlusion_texture: Option<Arc<Texture>>,
 }
 
 #[derive(Debug)]
@@ -108,6 +109,16 @@ impl Scene {
         _gltf_scene: &gltf::Scene, // TODO: Implement GLTF scene logic
         buffers: &[gltf::buffer::Data],
     ) -> SceneResult<Self> {
+        let mut texture_cache = TextureCache::new();
+        Self::from_gltf_with_cache(document, _gltf_scene, buffers, &mut texture_cache)
+    }
+
+    pub fn from_gltf_with_cache(
+        document: &gltf::Document,
+        _gltf_scene: &gltf::Scene, // TODO: Implement GLTF scene logic
+        buffers: &[gltf::buffer::Data],
+        texture_cache: &mut TextureCache,
+    ) -> SceneResult<Self> {
         let mut scene = Scene {
             meshes: Vec::new(),
             nodes: Vec::new(),
@@ -132,11 +143,11 @@ impl Scene {
             scene.meshes.push(Mesh::from_gltf(&mesh, buffers)?);
         }
 
-        // Collect materials
+        // Collect materials using the provided texture cache
         for material in document.materials() {
             scene
                 .materials
-                .push(Material::from_gltf(&material, buffers)?);
+                .push(Material::from_gltf(&material, buffers, texture_cache)?);
         }
 
         // Collect cameras
@@ -283,7 +294,11 @@ impl Primitive {
 }
 
 impl Material {
-    fn from_gltf(material: &gltf::Material, _buffers: &[gltf::buffer::Data]) -> SceneResult<Self> {
+    fn from_gltf(
+        material: &gltf::Material, 
+        _buffers: &[gltf::buffer::Data],
+        texture_cache: &mut TextureCache,
+    ) -> SceneResult<Self> {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();
 
@@ -298,22 +313,37 @@ impl Material {
             base_color_texture: material
                 .pbr_metallic_roughness()
                 .base_color_texture()
-                .map(|tex| Texture::from_gltf(&tex.texture()))
-                .transpose()
-                .map_err(|e| SceneError::ConversionError(e.to_string()))?,
+                .and_then(|tex| {
+                    match tex.texture().source().source() {
+                        gltf::image::Source::Uri { uri, .. } => {
+                            Some(texture_cache.get_or_create(uri))
+                        }
+                        gltf::image::Source::View { .. } => None,
+                    }
+                }),
             metallic_factor: pbr.metallic_factor(),
             roughness_factor: pbr.roughness_factor(),
             metallic_roughness_texture: material
                 .pbr_metallic_roughness()
                 .metallic_roughness_texture()
-                .map(|tex| Texture::from_gltf(&tex.texture()))
-                .transpose()
-                .map_err(|e| SceneError::ConversionError(e.to_string()))?,
+                .and_then(|tex| {
+                    match tex.texture().source().source() {
+                        gltf::image::Source::Uri { uri, .. } => {
+                            Some(texture_cache.get_or_create(uri))
+                        }
+                        gltf::image::Source::View { .. } => None,
+                    }
+                }),
             normal_texture: material
                 .normal_texture()
-                .map(|tex| Texture::from_gltf(&tex.texture()))
-                .transpose()
-                .map_err(|e| SceneError::ConversionError(e.to_string()))?,
+                .and_then(|tex| {
+                    match tex.texture().source().source() {
+                        gltf::image::Source::Uri { uri, .. } => {
+                            Some(texture_cache.get_or_create(uri))
+                        }
+                        gltf::image::Source::View { .. } => None,
+                    }
+                }),
             emissive_factor: Vec3::new(
                 material.emissive_factor()[0],
                 material.emissive_factor()[1],
@@ -321,14 +351,24 @@ impl Material {
             ),
             emissive_texture: material
                 .emissive_texture()
-                .map(|tex| Texture::from_gltf(&tex.texture()))
-                .transpose()
-                .map_err(|e| SceneError::ConversionError(e.to_string()))?,
+                .and_then(|tex| {
+                    match tex.texture().source().source() {
+                        gltf::image::Source::Uri { uri, .. } => {
+                            Some(texture_cache.get_or_create(uri))
+                        }
+                        gltf::image::Source::View { .. } => None,
+                    }
+                }),
             occlusion_texture: material
                 .occlusion_texture()
-                .map(|tex| Texture::from_gltf(&tex.texture()))
-                .transpose()
-                .map_err(|e| SceneError::ConversionError(e.to_string()))?,
+                .and_then(|tex| {
+                    match tex.texture().source().source() {
+                        gltf::image::Source::Uri { uri, .. } => {
+                            Some(texture_cache.get_or_create(uri))
+                        }
+                        gltf::image::Source::View { .. } => None,
+                    }
+                }),
         })
     }
 }
@@ -455,4 +495,31 @@ pub fn compute_scene_bounds(scene: &Scene) -> SceneBounds {
     }
 
     bounds
+}
+
+#[derive(Debug)]
+pub struct TextureCache {
+    textures: HashMap<String, Arc<Texture>>,
+}
+
+impl TextureCache {
+    pub fn new() -> Self {
+        Self {
+            textures: HashMap::new(),
+        }
+    }
+
+    pub fn get_or_create(&mut self, uri: &str) -> Arc<Texture> {
+        if let Some(texture) = self.textures.get(uri) {
+            Arc::clone(texture)
+        } else {
+            let texture = Arc::new(Texture {
+                uri: Some(uri.to_string()),
+                width: 0,  // TODO: Load actual texture dimensions
+                height: 0, // TODO: Load actual texture dimensions
+            });
+            self.textures.insert(uri.to_string(), Arc::clone(&texture));
+            texture
+        }
+    }
 }
