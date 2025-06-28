@@ -442,9 +442,10 @@ impl TileRasterizer {
 
                 // Sample base texture for each pixel
                 let diffuse_vec = diffuse_texture.sample_vec4(uv_x, uv_y);
-                color_r *= diffuse_vec[0];
-                color_g *= diffuse_vec[1];
-                color_b *= diffuse_vec[2];
+                // Simple gamma 2.0 instead of 2.2 for perf
+                color_r *= diffuse_vec[0] * diffuse_vec[0];
+                color_g *= diffuse_vec[1] * diffuse_vec[1];
+                color_b *= diffuse_vec[2] * diffuse_vec[2];
             }
         } else {
             // TODO: Handle missing material
