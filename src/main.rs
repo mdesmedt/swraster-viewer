@@ -98,11 +98,12 @@ fn main() {
                     .sum::<usize>()
             })
             .sum();
-        
+
         // Calculate texture statistics
         let unique_textures = texture_cache.unique_texture_count();
-        let total_texture_data_mib = (texture_cache.total_texture_data_size() as f64) / (1024.0 * 1024.0);
-        
+        let total_texture_data_mib =
+            (texture_cache.total_texture_data_size() as f64) / (1024.0 * 1024.0);
+
         println!("Scene Statistics:");
         println!("  Nodes: {}", scene.nodes.len());
         println!("  Meshes: {}", scene.meshes.len());
@@ -134,7 +135,11 @@ fn main() {
         };
 
         // Create and store the render state
-        let render_state = RenderState { scene, camera, texture_cache };
+        let render_state = RenderState {
+            scene,
+            camera,
+            texture_cache,
+        };
         if let Ok(mut state) = render_state_loading.lock() {
             *state = Some(render_state);
         }

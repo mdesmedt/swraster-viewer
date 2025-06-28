@@ -384,24 +384,25 @@ impl TileRasterizer {
 
         // Compute normal
         let length_squared = normal_x * normal_x + normal_y * normal_y + normal_z * normal_z;
-        let length = Vec4::new(
-            length_squared.x.sqrt(),
-            length_squared.y.sqrt(),
-            length_squared.z.sqrt(),
-            length_squared.w.sqrt(),
-        );
-        let normalized_x = normal_x / length;
-        let normalized_y = normal_y / length;
-        let normalized_z = normal_z / length;
+        let one_over_length = 1.0
+            / Vec4::new(
+                length_squared.x.sqrt(),
+                length_squared.y.sqrt(),
+                length_squared.z.sqrt(),
+                length_squared.w.sqrt(),
+            );
+        let normalized_x = normal_x * one_over_length;
+        let normalized_y = normal_y * one_over_length;
+        let normalized_z = normal_z * one_over_length;
 
         // Apply N.L lighting
         let dot_x = normalized_x * light_x;
         let dot_y = normalized_y * light_y;
         let dot_z = normalized_z * light_z;
-        let mut light_intensity = dot_x + dot_y + dot_z;
+        let mut light_intensity = (dot_x + dot_y + dot_z).clamp(Vec4::ZERO, Vec4::ONE);
 
-        // TODO: Add ambient light
-        light_intensity += Vec4::splat(0.1);
+        // TODO: Add better ambient light somehow
+        light_intensity += Vec4::splat(0.2);
 
         // Start the color with irradiance, currently monochrome
         let mut color_r = light_intensity;
@@ -439,13 +440,16 @@ impl TileRasterizer {
                 color_g *= diffuse_vec[1];
                 color_b *= diffuse_vec[2];
             }
-        }
-        else {
+        } else {
             // TODO: Handle missing material
         }
 
-        // Pack colors into integers
+        // Clamp final colors before packing
+        color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);
+        color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
+        color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
+        // Pack colors into integers
         let packed_colors = UVec4::new(
             ((color_r.x * 255.0) as u32) << 16
                 | ((color_g.x * 255.0) as u32) << 8

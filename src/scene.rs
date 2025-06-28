@@ -164,9 +164,12 @@ impl Scene {
 
         // Collect materials using the provided texture cache
         for material in document.materials() {
-            scene
-                .materials
-                .push(Material::from_gltf(&material, document, buffers, texture_cache)?);
+            scene.materials.push(Material::from_gltf(
+                &material,
+                document,
+                buffers,
+                texture_cache,
+            )?);
         }
 
         // Collect cameras
@@ -312,7 +315,11 @@ impl Primitive {
     }
 }
 
-fn get_texture_and_sampler(texture_gltf: &gltf::texture::Texture, document: &gltf::Document, texture_cache: &mut TextureCache) -> Option<TextureAndSampler> {
+fn get_texture_and_sampler(
+    texture_gltf: &gltf::texture::Texture,
+    document: &gltf::Document,
+    texture_cache: &mut TextureCache,
+) -> Option<TextureAndSampler> {
     match texture_gltf.source().source() {
         gltf::image::Source::Uri { uri, .. } => {
             let texture = texture_cache.get_or_create(uri);
@@ -362,7 +369,7 @@ fn get_texture_and_sampler(texture_gltf: &gltf::texture::Texture, document: &glt
 
 impl Material {
     fn from_gltf(
-        material: &gltf::Material, 
+        material: &gltf::Material,
         document: &gltf::Document,
         _buffers: &[gltf::buffer::Data],
         texture_cache: &mut TextureCache,
@@ -414,7 +421,12 @@ impl Texture {
             gltf::image::Source::View { .. } => (None, 0, 0),
         };
 
-        Ok(Texture { uri, width, height, data: Vec::new() })
+        Ok(Texture {
+            uri,
+            width,
+            height,
+            data: Vec::new(),
+        })
     }
 }
 
@@ -424,12 +436,20 @@ impl TextureAndSampler {
             WrapMode::ClampToEdge => coord.clamp(0.0, 1.0),
             WrapMode::Repeat => {
                 let wrapped = coord - coord.floor();
-                if wrapped < 0.0 { wrapped + 1.0 } else { wrapped }
+                if wrapped < 0.0 {
+                    wrapped + 1.0
+                } else {
+                    wrapped
+                }
             }
             WrapMode::MirroredRepeat => {
                 let abs_coord = coord.abs();
                 let wrapped = abs_coord - abs_coord.floor();
-                if coord < 0.0 { 1.0 - wrapped } else { wrapped }
+                if coord < 0.0 {
+                    1.0 - wrapped
+                } else {
+                    wrapped
+                }
             }
         }
     }
@@ -449,7 +469,7 @@ impl TextureAndSampler {
 
         // Get pixel index
         let pixel_index = ((y * self.texture.width + x) * 4) as usize;
-        
+
         if pixel_index + 3 >= self.texture.data.len() {
             return Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
         }
@@ -472,19 +492,19 @@ impl TextureAndSampler {
 
         // Sample four pixels
         let mut pixels = [Vec4::ZERO; 4];
-        
+
         for i in 0..4 {
             // Apply wrap modes to UV coordinates
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
             let v = Self::apply_wrap_mode(v_vec[i], &self.sampler.wrap_t);
-            
+
             // Convert to pixel coordinates
             let x = (u * (self.texture.width - 1) as f32) as u32;
             let y = (v * (self.texture.height - 1) as f32) as u32;
-            
+
             // Get pixel index
             let pixel_index = ((y * self.texture.width + x) * 4) as usize;
-            
+
             if pixel_index + 3 >= self.texture.data.len() {
                 pixels[i] = Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
             } else {
@@ -493,11 +513,11 @@ impl TextureAndSampler {
                 let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
                 let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
                 let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
-                
+
                 pixels[i] = Vec4::new(r, g, b, a);
             }
         }
-        
+
         // Rearrange into [reds, greens, blues, alphas] format
         [
             Vec4::new(pixels[0].x, pixels[1].x, pixels[2].x, pixels[3].x), // All reds
@@ -663,7 +683,10 @@ impl TextureCache {
         // Construct the full path based on GLTF spec
         let texture_path = if let Some(ref base_dir) = self.base_dir {
             // If URI is absolute (starts with http://, https://, or file://), use as-is
-            if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("file://") {
+            if uri.starts_with("http://")
+                || uri.starts_with("https://")
+                || uri.starts_with("file://")
+            {
                 uri.to_string()
             } else {
                 // Otherwise, make it relative to the base directory
@@ -680,7 +703,7 @@ impl TextureCache {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 let data = rgba.into_raw();
-                
+
                 Ok(Texture {
                     uri: Some(uri.to_string()),
                     width,
@@ -689,7 +712,7 @@ impl TextureCache {
                 })
             }
             Err(e) => Err(SceneError::MissingData(format!(
-                "Could not load texture '{}' from path '{}': {}", 
+                "Could not load texture '{}' from path '{}': {}",
                 uri, texture_path, e
             ))),
         }
@@ -700,7 +723,7 @@ impl TextureCache {
         let width = 64;
         let height = 64;
         let mut data = Vec::with_capacity((width * height * 4) as usize);
-        
+
         for y in 0..height {
             for x in 0..width {
                 let is_checker = ((x / 8) + (y / 8)) % 2 == 0;
@@ -708,7 +731,7 @@ impl TextureCache {
                 data.extend_from_slice(&[color, color, color, 255]);
             }
         }
-        
+
         Texture {
             uri: None,
             width,
@@ -722,6 +745,9 @@ impl TextureCache {
     }
 
     pub fn total_texture_data_size(&self) -> usize {
-        self.textures.values().map(|texture| texture.data.len()).sum()
+        self.textures
+            .values()
+            .map(|texture| texture.data.len())
+            .sum()
     }
 }
