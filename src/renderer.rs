@@ -355,6 +355,12 @@ impl TileRasterizer {
             bary2,
         ) * w;
 
+        // Perform depth test as early as possible
+        let (final_depth, final_mask) = self.depth_test(p.x, p.y, z, mask);
+        if !final_mask.any() {
+            return;
+        }
+
         let normal_x = interpolate_vertex_attribute(
             packet.normal_over_w[0].x,
             packet.normal_over_w[1].x,
@@ -465,15 +471,18 @@ impl TileRasterizer {
                 | ((color_b.w * 255.0) as u32),
         );
 
-        self.write_pixels(p.x, p.y, packed_colors, z, mask);
+        self.write_pixels(p.x, p.y, packed_colors, final_depth, final_mask);
     }
 
-    // Perform depth test and write color and depth
-    fn write_pixels(&mut self, x: i32, y: i32, color: UVec4, depth: Vec4, mask: BVec4A) {
+    // Perform depth test and return final depth and a mask of the pixels that passed depth testing
+    fn depth_test(&mut self, x: i32, y: i32, depth: Vec4, mask: BVec4A) -> (Vec4, BVec4A) {
         debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
         let local_y = y - self.screen_min.y;
         let width = (self.screen_max.x - self.screen_min.x) as usize;
         let width_vec4 = (width + 3) / 4;
+
+        let mut final_depth = depth;
+        let mut final_mask = mask;
 
         if local_y >= 0 && local_y < (self.screen_max.y - self.screen_min.y) as i32 {
             // x is the leftmost pixel of the 4-pixel SIMD block
@@ -486,17 +495,43 @@ impl TileRasterizer {
                 let current_depth = self.depth[index];
                 // Perform depth test
                 let mask_depth = depth.cmple(current_depth);
-                let mask_combined = mask & mask_depth;
-                // TODO: This is a little annoying, now we have to convert to a BVec4 to use the select function for UVec4
-                let booleans: [bool; 4] = mask_combined.into();
-                let mask_combined_bvec4 = BVec4::from(booleans);
-                if mask_combined.any() {
-                    let current_color = self.color[index];
-                    let new_color = UVec4::select(mask_combined_bvec4, color, current_color);
-                    let new_depth = Vec4::select(mask_combined, depth, current_depth);
-                    self.color[index] = new_color;
-                    self.depth[index] = new_depth;
-                }
+                // Create final mask which determines which pixels to shade and write
+                final_mask &= mask_depth;
+                // Do the depth select here because we already have everything we need
+                final_depth = Vec4::select(final_mask, depth, current_depth);
+            }
+        }
+
+        (final_depth, final_mask)
+    }
+
+    // Perform depth test and write color and depth
+    fn write_pixels(
+        &mut self,
+        x: i32,
+        y: i32,
+        color: UVec4,
+        final_depth: Vec4,
+        final_mask: BVec4A,
+    ) {
+        debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
+        let local_y = y - self.screen_min.y;
+        let width = (self.screen_max.x - self.screen_min.x) as usize;
+        let width_vec4 = (width + 3) / 4;
+
+        if local_y >= 0 && local_y < (self.screen_max.y - self.screen_min.y) as i32 {
+            // x is the leftmost pixel of the 4-pixel SIMD block
+            let local_x = x - self.screen_min.x;
+            let vec4_index = local_x as usize / 4;
+
+            if vec4_index < width_vec4 {
+                let index = local_y as usize * width_vec4 + vec4_index;
+                let booleans: [bool; 4] = final_mask.into();
+                let mask_bvec4 = BVec4::from(booleans);
+                let current_color = self.color[index];
+                let final_color = UVec4::select(mask_bvec4, color, current_color);
+                self.color[index] = final_color;
+                self.depth[index] = final_depth;
             }
         }
     }
