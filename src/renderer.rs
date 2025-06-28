@@ -398,7 +398,10 @@ impl TileRasterizer {
         let dot_x = normalized_x * light_x;
         let dot_y = normalized_y * light_y;
         let dot_z = normalized_z * light_z;
-        let light_intensity = dot_x + dot_y + dot_z;
+        let mut light_intensity = dot_x + dot_y + dot_z;
+
+        // TODO: Add ambient light
+        light_intensity += Vec4::splat(0.1);
 
         // Start the color with irradiance, currently monochrome
         let mut color_r = light_intensity;
