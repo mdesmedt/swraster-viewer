@@ -84,7 +84,7 @@ fn main() {
 
         // Create texture cache for the scene with the correct base directory
         let mut texture_cache = TextureCache::with_base_dir(base_dir);
-        let scene = Scene::from_gltf_with_cache(&document, &gltf_scene, &buffers, &mut texture_cache)
+        let scene = Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache)
             .expect("Failed to create scene from GLTF");
 
         // Print scene statistics

@@ -63,14 +63,14 @@ pub struct Primitive {
 pub struct Material {
     pub name: Option<String>,
     pub base_color_factor: Vec4,
-    pub base_color_texture: Option<Arc<Texture>>,
+    pub base_color_texture: Option<TextureAndSampler>,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
-    pub metallic_roughness_texture: Option<Arc<Texture>>,
-    pub normal_texture: Option<Arc<Texture>>,
+    pub metallic_roughness_texture: Option<TextureAndSampler>,
+    pub normal_texture: Option<TextureAndSampler>,
     pub emissive_factor: Vec3,
-    pub emissive_texture: Option<Arc<Texture>>,
-    pub occlusion_texture: Option<Arc<Texture>>,
+    pub emissive_texture: Option<TextureAndSampler>,
+    pub occlusion_texture: Option<TextureAndSampler>,
 }
 
 #[derive(Debug)]
@@ -79,6 +79,33 @@ pub struct Texture {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>, // RGBA8 data
+}
+
+#[derive(Debug)]
+pub enum WrapMode {
+    Repeat,
+    MirroredRepeat,
+    ClampToEdge,
+}
+
+#[derive(Debug)]
+pub enum Filter {
+    Nearest,
+    Linear,
+}
+
+#[derive(Debug)]
+pub struct Sampler {
+    pub wrap_s: WrapMode,
+    pub wrap_t: WrapMode,
+    pub min_filter: Filter,
+    pub mag_filter: Filter,
+}
+
+#[derive(Debug)]
+pub struct TextureAndSampler {
+    pub texture: Arc<Texture>,
+    pub sampler: Sampler,
 }
 
 #[derive(Debug)]
@@ -106,15 +133,6 @@ pub enum Projection {
 
 impl Scene {
     pub fn from_gltf(
-        document: &gltf::Document,
-        _gltf_scene: &gltf::Scene, // TODO: Implement GLTF scene logic
-        buffers: &[gltf::buffer::Data],
-    ) -> SceneResult<Self> {
-        let mut texture_cache = TextureCache::new();
-        Self::from_gltf_with_cache(document, _gltf_scene, buffers, &mut texture_cache)
-    }
-
-    pub fn from_gltf_with_cache(
         document: &gltf::Document,
         _gltf_scene: &gltf::Scene, // TODO: Implement GLTF scene logic
         buffers: &[gltf::buffer::Data],
@@ -148,7 +166,7 @@ impl Scene {
         for material in document.materials() {
             scene
                 .materials
-                .push(Material::from_gltf(&material, buffers, texture_cache)?);
+                .push(Material::from_gltf(&material, document, buffers, texture_cache)?);
         }
 
         // Collect cameras
@@ -294,9 +312,58 @@ impl Primitive {
     }
 }
 
+fn get_texture_and_sampler(texture_gltf: &gltf::texture::Texture, document: &gltf::Document, texture_cache: &mut TextureCache) -> Option<TextureAndSampler> {
+    match texture_gltf.source().source() {
+        gltf::image::Source::Uri { uri, .. } => {
+            let texture = texture_cache.get_or_create(uri);
+            let sampler = if let Some(sampler_index) = texture_gltf.sampler().index() {
+                // Convert the sampler
+                let gltf_sampler = document.samplers().nth(sampler_index).unwrap();
+                Sampler {
+                    wrap_s: match gltf_sampler.wrap_s() {
+                        gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
+                        gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
+                        gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
+                    },
+                    wrap_t: match gltf_sampler.wrap_t() {
+                        gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
+                        gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
+                        gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
+                    },
+                    min_filter: match gltf_sampler.min_filter() {
+                        Some(gltf::texture::MinFilter::Nearest) => Filter::Nearest,
+                        Some(gltf::texture::MinFilter::Linear) => Filter::Linear,
+                        Some(gltf::texture::MinFilter::NearestMipmapNearest) => Filter::Nearest,
+                        Some(gltf::texture::MinFilter::LinearMipmapNearest) => Filter::Linear,
+                        Some(gltf::texture::MinFilter::NearestMipmapLinear) => Filter::Nearest,
+                        Some(gltf::texture::MinFilter::LinearMipmapLinear) => Filter::Linear,
+                        None => Filter::Linear,
+                    },
+                    mag_filter: match gltf_sampler.mag_filter() {
+                        Some(gltf::texture::MagFilter::Nearest) => Filter::Nearest,
+                        Some(gltf::texture::MagFilter::Linear) => Filter::Linear,
+                        None => Filter::Linear,
+                    },
+                }
+            } else {
+                // Default sampler state
+                Sampler {
+                    wrap_s: WrapMode::Repeat,
+                    wrap_t: WrapMode::Repeat,
+                    min_filter: Filter::Linear,
+                    mag_filter: Filter::Linear,
+                }
+            };
+            Some(TextureAndSampler { texture, sampler })
+        }
+        gltf::image::Source::View { .. } => None,
+    }
+}
+
 impl Material {
     fn from_gltf(
         material: &gltf::Material, 
+        document: &gltf::Document,
         _buffers: &[gltf::buffer::Data],
         texture_cache: &mut TextureCache,
     ) -> SceneResult<Self> {
@@ -314,37 +381,16 @@ impl Material {
             base_color_texture: material
                 .pbr_metallic_roughness()
                 .base_color_texture()
-                .and_then(|tex| {
-                    match tex.texture().source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            Some(texture_cache.get_or_create(uri))
-                        }
-                        gltf::image::Source::View { .. } => None,
-                    }
-                }),
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
             metallic_factor: pbr.metallic_factor(),
             roughness_factor: pbr.roughness_factor(),
             metallic_roughness_texture: material
                 .pbr_metallic_roughness()
                 .metallic_roughness_texture()
-                .and_then(|tex| {
-                    match tex.texture().source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            Some(texture_cache.get_or_create(uri))
-                        }
-                        gltf::image::Source::View { .. } => None,
-                    }
-                }),
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
             normal_texture: material
                 .normal_texture()
-                .and_then(|tex| {
-                    match tex.texture().source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            Some(texture_cache.get_or_create(uri))
-                        }
-                        gltf::image::Source::View { .. } => None,
-                    }
-                }),
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
             emissive_factor: Vec3::new(
                 material.emissive_factor()[0],
                 material.emissive_factor()[1],
@@ -352,24 +398,10 @@ impl Material {
             ),
             emissive_texture: material
                 .emissive_texture()
-                .and_then(|tex| {
-                    match tex.texture().source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            Some(texture_cache.get_or_create(uri))
-                        }
-                        gltf::image::Source::View { .. } => None,
-                    }
-                }),
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
             occlusion_texture: material
                 .occlusion_texture()
-                .and_then(|tex| {
-                    match tex.texture().source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            Some(texture_cache.get_or_create(uri))
-                        }
-                        gltf::image::Source::View { .. } => None,
-                    }
-                }),
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
         })
     }
 }
@@ -384,38 +416,55 @@ impl Texture {
 
         Ok(Texture { uri, width, height, data: Vec::new() })
     }
+}
+
+impl TextureAndSampler {
+    fn apply_wrap_mode(coord: f32, mode: &WrapMode) -> f32 {
+        match mode {
+            WrapMode::ClampToEdge => coord.clamp(0.0, 1.0),
+            WrapMode::Repeat => {
+                let wrapped = coord - coord.floor();
+                if wrapped < 0.0 { wrapped + 1.0 } else { wrapped }
+            }
+            WrapMode::MirroredRepeat => {
+                let abs_coord = coord.abs();
+                let wrapped = abs_coord - abs_coord.floor();
+                if coord < 0.0 { 1.0 - wrapped } else { wrapped }
+            }
+        }
+    }
 
     pub fn sample(&self, uv: Vec2) -> Vec4 {
-        if self.data.is_empty() {
+        if self.texture.data.is_empty() {
             return Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for missing texture
         }
 
-        // Clamp UV coordinates to [0, 1]
-        let u = uv.x.clamp(0.0, 1.0);
-        let v = uv.y.clamp(0.0, 1.0);
+        // Apply wrap modes to UV coordinates
+        let u = Self::apply_wrap_mode(uv.x, &self.sampler.wrap_s);
+        let v = Self::apply_wrap_mode(uv.y, &self.sampler.wrap_t);
 
         // Convert to pixel coordinates
-        let x = (u * (self.width - 1) as f32) as u32;
-        let y = (v * (self.height - 1) as f32) as u32;
+        let x = (u * (self.texture.width - 1) as f32) as u32;
+        let y = (v * (self.texture.height - 1) as f32) as u32;
 
         // Get pixel index
-        let pixel_index = ((y * self.width + x) * 4) as usize;
+        let pixel_index = ((y * self.texture.width + x) * 4) as usize;
         
-        if pixel_index + 3 >= self.data.len() {
+        if pixel_index + 3 >= self.texture.data.len() {
             return Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
         }
 
         // Read RGBA values and convert to float [0, 1]
-        let r = self.data[pixel_index] as f32 / 255.0;
-        let g = self.data[pixel_index + 1] as f32 / 255.0;
-        let b = self.data[pixel_index + 2] as f32 / 255.0;
-        let a = self.data[pixel_index + 3] as f32 / 255.0;
+        let r = self.texture.data[pixel_index] as f32 / 255.0;
+        let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
+        let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
+        let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
 
         Vec4::new(r, g, b, a)
     }
 
     pub fn sample_vec4(&self, u_vec: Vec4, v_vec: Vec4) -> [Vec4; 4] {
-        if self.data.is_empty() {
+        if self.texture.data.is_empty() {
             // Return magenta for missing texture
             let magenta = Vec4::new(1.0, 0.0, 1.0, 1.0);
             return [magenta, magenta, magenta, magenta];
@@ -425,24 +474,25 @@ impl Texture {
         let mut pixels = [Vec4::ZERO; 4];
         
         for i in 0..4 {
-            let u = u_vec[i].clamp(0.0, 1.0);
-            let v = v_vec[i].clamp(0.0, 1.0);
+            // Apply wrap modes to UV coordinates
+            let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
+            let v = Self::apply_wrap_mode(v_vec[i], &self.sampler.wrap_t);
             
             // Convert to pixel coordinates
-            let x = (u * (self.width - 1) as f32) as u32;
-            let y = (v * (self.height - 1) as f32) as u32;
+            let x = (u * (self.texture.width - 1) as f32) as u32;
+            let y = (v * (self.texture.height - 1) as f32) as u32;
             
             // Get pixel index
-            let pixel_index = ((y * self.width + x) * 4) as usize;
+            let pixel_index = ((y * self.texture.width + x) * 4) as usize;
             
-            if pixel_index + 3 >= self.data.len() {
+            if pixel_index + 3 >= self.texture.data.len() {
                 pixels[i] = Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
             } else {
                 // Read RGBA values and convert to float [0, 1]
-                let r = self.data[pixel_index] as f32 / 255.0;
-                let g = self.data[pixel_index + 1] as f32 / 255.0;
-                let b = self.data[pixel_index + 2] as f32 / 255.0;
-                let a = self.data[pixel_index + 3] as f32 / 255.0;
+                let r = self.texture.data[pixel_index] as f32 / 255.0;
+                let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
+                let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
+                let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
                 
                 pixels[i] = Vec4::new(r, g, b, a);
             }
