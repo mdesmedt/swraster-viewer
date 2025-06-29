@@ -25,6 +25,11 @@ impl fmt::Display for SceneError {
 impl Error for SceneError {}
 pub type SceneResult<T> = Result<T, SceneError>;
 
+pub struct BoundingSphere {
+    pub center: Vec3,
+    pub radius: f32,
+}
+
 pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub nodes: Vec<Node>,
@@ -53,6 +58,7 @@ pub struct Primitive {
     pub texcoords: Vec<Vec2>,
     pub indices: Vec<u32>,
     pub material_index: Option<usize>,
+    pub bounding_sphere: BoundingSphere,
 }
 
 pub struct Material {
@@ -265,13 +271,34 @@ impl Primitive {
             .into_u32()
             .collect();
 
+        let bounding_sphere = compute_bounding_sphere(&positions);
+
         Ok(Primitive {
             positions,
             normals,
             texcoords,
             indices,
+            bounding_sphere,
             material_index: primitive.material().index(),
         })
+    }
+}
+
+fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+
+    for position in positions {
+        min = min.min(*position);
+        max = max.max(*position);
+    }
+
+    let center = min.midpoint(max);
+    let radius = (max - min).length() / 2.0;
+
+    BoundingSphere {
+        center,
+        radius,
     }
 }
 

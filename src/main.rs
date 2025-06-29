@@ -121,6 +121,10 @@ fn main() {
             })
             .sum();
 
+        let total_primitives: usize = scene.nodes.iter().map(|node| {
+            node.mesh_index.map(|mesh_index| scene.meshes[mesh_index].primitives.len()).unwrap_or(0)
+        }).sum();
+
         // Calculate texture statistics
         let unique_textures = texture_cache.unique_texture_count();
         let total_texture_data_mib =
@@ -129,6 +133,7 @@ fn main() {
         println!("Scene Statistics:");
         println!("  Nodes: {}", scene.nodes.len());
         println!("  Meshes: {}", scene.meshes.len());
+        println!("  Primitives: {}", total_primitives);
         println!("  Total Triangles: {}", total_triangles);
         println!("  Unique Textures: {}", unique_textures);
         println!("  Total Texture Data: {:.2} MiB", total_texture_data_mib);
@@ -239,6 +244,9 @@ fn main() {
             } else {
                 is_dragging = false;
             }
+
+            // Update camera matrices
+            camera.update_matrices();
 
             // Render the scene
             renderer.render_scene(&render_state.scene, camera, &mut buffer);

@@ -1,5 +1,5 @@
 use crate::rendercamera::RenderCamera;
-use crate::scene::{Node, Scene};
+use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
 use crossbeam_channel::{unbounded, Sender};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
@@ -133,6 +133,19 @@ fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> (TileBinner, Tile
     )
 }
 
+fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> bool {
+    // Transform the sphere to view space
+    let center_view = camera.view_matrix * sphere.center.extend(1.0);
+    let view_clip_planes = camera.view_clip_planes;
+    for plane in view_clip_planes {
+        let distance = plane.dot(center_view);
+        if distance < -sphere.radius {
+            return false;
+        }
+    }
+    true
+}
+
 // Renderer which manages clipping, culling, binning and rasterization
 pub struct Renderer {
     width: i32,
@@ -179,11 +192,6 @@ impl Renderer {
         camera: &RenderCamera,
         buffer: &mut RenderBuffer,
     ) {
-        // Set up matrices
-        let view_matrix = camera.view_matrix();
-        let projection_matrix = camera.projection_matrix();
-        let view_project_matrix = projection_matrix * view_matrix;
-
         // Using a thread scope here to ensure that the rasterizer threads are joined
         std::thread::scope(|scope| {
             // Kick off the rasterizer threads which start listening to their channels
@@ -197,7 +205,7 @@ impl Renderer {
 
             // Clip and bin primitives in each node in the scene in parallel
             scene.nodes.par_iter().for_each(|node| {
-                self.render_node(scene, node, view_project_matrix);
+                self.render_node(scene, camera, node, camera.view_project_matrix);
             });
 
             // Send the termination message to all channels
@@ -214,7 +222,7 @@ impl Renderer {
         }
     }
 
-    fn render_node(&self, scene: &Scene, node: &Node, view_project_matrix: Mat4) {
+    fn render_node(&self, scene: &Scene, camera: &RenderCamera, node: &Node, view_project_matrix: Mat4) {
         // Compute projection matrix
         let model_matrix = node.transform;
         let mvp_matrix = view_project_matrix * model_matrix;
@@ -224,20 +232,22 @@ impl Renderer {
 
         // Render the node's mesh if it has one
         if let Some(mesh_index) = node.mesh_index {
-            self.render_mesh(scene, mesh_index, mvp_matrix, rotation_matrix);
+            self.render_mesh(scene, camera, mesh_index, model_matrix, mvp_matrix, rotation_matrix);
         }
 
         // Recursively render child nodes in parallel
         node.children.par_iter().for_each(|&child_index| {
             let child = &scene.nodes[child_index];
-            self.render_node(scene, child, mvp_matrix);
+            self.render_node(scene, camera, child, mvp_matrix);
         });
     }
 
     fn render_mesh(
         &self,
         scene: &Scene,
+        camera: &RenderCamera,
         mesh_index: usize,
+        model_matrix: Mat4,
         mvp_matrix: Mat4,
         rotation_matrix: Mat3A,
     ) {
@@ -247,10 +257,12 @@ impl Renderer {
             .par_iter()
             .enumerate()
             .for_each(|(primitive_index, _)| {
-                self.assemble_primitive(
+                self.render_primitive(
                     scene,
+                    camera,
                     mesh_index,
                     primitive_index,
+                    model_matrix,
                     mvp_matrix,
                     rotation_matrix,
                 );
@@ -258,16 +270,32 @@ impl Renderer {
     }
 
     // Assembles a primitive and sends it to the clipper
-    fn assemble_primitive(
+    fn render_primitive(
         &self,
         scene: &Scene,
+        camera: &RenderCamera,
         mesh_index: usize,
         primitive_index: usize,
+        model_matrix: Mat4,
         mvp_matrix: Mat4,
-        model_matrix: Mat3A,
+        rotation_matrix: Mat3A,
     ) {
         let mesh = &scene.meshes[mesh_index];
         let primitive = &mesh.primitives[primitive_index];
+
+        // Convert bounding sphere to world space
+        // TODO: Cache world space bounding sphere in the primitive?
+        let center_world = model_matrix * primitive.bounding_sphere.center.extend(1.0);
+        let radius_world = primitive.bounding_sphere.radius * model_matrix.x_axis.length();
+        let bounding_sphere_world = BoundingSphere {
+            center: center_world.truncate(),
+            radius: radius_world,
+        };
+
+        // Frustum culling with bounding sphere
+        if !test_sphere_frustum(&bounding_sphere_world, camera) {
+            return; // Cull the primitive
+        }
 
         let positions = &primitive.positions;
         let normals = &primitive.normals;
@@ -304,9 +332,9 @@ impl Renderer {
                 let normal2 = normals[i2];
 
                 // Rotate normals to world space
-                let normal_world0 = model_matrix * normal0;
-                let normal_world1 = model_matrix * normal1;
-                let normal_world2 = model_matrix * normal2;
+                let normal_world0 = rotation_matrix * normal0;
+                let normal_world1 = rotation_matrix * normal1;
+                let normal_world2 = rotation_matrix * normal2;
 
                 let triangle = Triangle {
                     v0: Vertex {

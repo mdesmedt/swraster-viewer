@@ -1,4 +1,4 @@
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use gltf::camera::Projection;
 use std::f32::consts::PI;
 
@@ -12,6 +12,11 @@ pub struct RenderCamera {
     yaw: f32,   // Rotation around Y axis
     pitch: f32, // Rotation around X axis
     roll: f32,  // Rotation around Z axis
+    // Cached matrices and planes
+    pub view_matrix: Mat4,
+    pub projection_matrix: Mat4,
+    pub view_project_matrix: Mat4,
+    pub view_clip_planes: [Vec4; 6],
 }
 
 impl RenderCamera {
@@ -33,6 +38,10 @@ impl RenderCamera {
             yaw,
             pitch,
             roll: 0.0,
+            view_matrix: Mat4::IDENTITY,
+            projection_matrix: Mat4::IDENTITY,
+            view_project_matrix: Mat4::IDENTITY,
+            view_clip_planes: [Vec4::ZERO; 6],
         }
     }
 
@@ -49,7 +58,14 @@ impl RenderCamera {
         }
     }
 
-    pub fn view_matrix(&self) -> Mat4 {
+    pub fn update_matrices(&mut self) {
+        self.view_matrix = self.compute_view_matrix();
+        self.projection_matrix = self.compute_projection_matrix();
+        self.view_project_matrix = self.projection_matrix * self.view_matrix;
+        self.view_clip_planes = self.compute_view_clip_planes();
+    }
+
+    fn compute_view_matrix(&self) -> Mat4 {
         // Get rotation matrix from quaternion
         let rotation_matrix: Mat4 = Mat4::from_quat(self.get_rotation());
 
@@ -59,7 +75,7 @@ impl RenderCamera {
         rotation_matrix * translation_matrix
     }
 
-    pub fn projection_matrix(&self) -> Mat4 {
+    fn compute_projection_matrix(&self) -> Mat4 {
         Mat4::perspective_rh(self.fov, self.width / self.height, self.near, self.far)
     }
 
@@ -89,5 +105,32 @@ impl RenderCamera {
         // Combine rotations in the same order as our matrix multiplication
         // roll * pitch * yaw
         q_roll * q_pitch * q_yaw
+    }
+
+    fn compute_view_clip_planes(&self) -> [Vec4; 6] {
+        let aspect_ratio = self.width / self.height;
+        let fov_half = self.fov * 0.5;
+        let near_half_height = self.near * fov_half.tan();
+        let near_half_width = near_half_height * aspect_ratio;
+        
+        // Left plane: (1, 0, -near_half_width/self.near, 0)
+        let left = Vec4::new(1.0, 0.0, -near_half_width / self.near, 0.0);
+        
+        // Right plane: (-1, 0, -near_half_width/self.near, 0)
+        let right = Vec4::new(-1.0, 0.0, -near_half_width / self.near, 0.0);
+        
+        // Bottom plane: (0, 1, -near_half_height/self.near, 0)
+        let bottom = Vec4::new(0.0, 1.0, -near_half_height / self.near, 0.0);
+        
+        // Top plane: (0, -1, -near_half_height/self.near, 0)
+        let top = Vec4::new(0.0, -1.0, -near_half_height / self.near, 0.0);
+        
+        // Near plane: (0, 0, -1, -self.near)
+        let near = Vec4::new(0.0, 0.0, -1.0, -self.near);
+        
+        // Far plane: (0, 0, 1, self.far)
+        let far = Vec4::new(0.0, 0.0, 1.0, self.far);
+        
+        [left, right, bottom, top, near, far]
     }
 }
