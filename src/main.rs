@@ -1,6 +1,9 @@
 use glam::{Vec3, Vec3A};
+use gltf::Gltf;
 use minifb::{Key, MouseButton, Window, WindowOptions};
 use std::env;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -29,6 +32,22 @@ struct RenderState {
     scene: Scene,
     camera: RenderCamera,
     texture_cache: TextureCache,
+}
+
+// Load the GLTF document and buffers, but skip loading images.
+fn import_gltf(
+    Gltf { document, blob }: Gltf,
+    base: Option<&Path>,
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), gltf::Error> {
+    let buffer_data = gltf::import_buffers(&document, base, blob)?;
+    Ok((document, buffer_data))
+}
+
+fn load_gltf(path: &Path) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), gltf::Error> {
+    let base = path.parent().unwrap_or_else(|| Path::new("./"));
+    let file = fs::File::open(path).map_err(gltf::Error::Io)?;
+    let reader = io::BufReader::new(file);
+    import_gltf(Gltf::from_reader(reader)?, Some(base))
 }
 
 fn main() {
@@ -70,7 +89,7 @@ fn main() {
     let gltf_path = gltf_path.to_path_buf(); // Clone the path for the thread
     thread::spawn(move || {
         // Load the GLTF file
-        let (document, buffers, _) = gltf::import(&gltf_path).expect("Failed to load GLTF file");
+        let (document, buffers) = load_gltf(&gltf_path).expect("Failed to load GLTF file");
 
         // Get the default scene or first scene
         let gltf_scene = document
