@@ -66,6 +66,8 @@ pub struct Material {
     pub emissive_factor: Vec3,
     pub emissive_texture: Option<TextureAndSampler>,
     pub occlusion_texture: Option<TextureAndSampler>,
+    pub is_alpha_tested: bool,
+    pub alpha_cutoff_vec: Vec4,
 }
 
 pub struct SceneCamera {
@@ -367,6 +369,8 @@ impl Material {
             occlusion_texture: material
                 .occlusion_texture()
                 .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
+            is_alpha_tested: material.alpha_mode() == gltf::material::AlphaMode::Mask,
+            alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),
         })
     }
 }

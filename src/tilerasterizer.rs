@@ -81,6 +81,13 @@ impl TileRasterizer {
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
         let material: Option<&Material> = scene.materials.get(material_index.unwrap());
+        
+        // Determine whether we can do early z testing
+        let is_alpha_tested = if let Some(material) = material {
+            material.is_alpha_tested
+        } else {
+            false
+        };
 
         // Get triangle vertices in screen space
         let p0 = packet.pos_screen[0];
@@ -154,6 +161,7 @@ impl TileRasterizer {
                         light_x,
                         light_y,
                         light_z,
+                        is_alpha_tested,
                         &packet,
                         material,
                     );
@@ -185,6 +193,7 @@ impl TileRasterizer {
         light_x: Vec4,
         light_y: Vec4,
         light_z: Vec4,
+        is_alpha_tested: bool,
         packet: &RasterPacket,
         material: Option<&Material>,
     ) {
@@ -226,10 +235,16 @@ impl TileRasterizer {
             bary2,
         ) * w;
 
-        // Perform depth test as early as possible
-        let (final_depth, final_mask) = self.depth_test(p.x, p.y, z, mask);
-        if !final_mask.any() {
-            return;
+
+        let mut out_depth = Vec4::splat(f32::INFINITY);
+        let mut out_mask = mask;
+
+        // Early Z test when not alpha testing
+        if !is_alpha_tested {
+            (out_depth, out_mask) = self.depth_test(p.x, p.y, z, mask);
+            if !out_mask.any() {
+                return;
+            }
         }
 
         let normal_x = interpolate_vertex_attribute(
@@ -317,9 +332,22 @@ impl TileRasterizer {
                 color_r *= diffuse_vec[0] * diffuse_vec[0];
                 color_g *= diffuse_vec[1] * diffuse_vec[1];
                 color_b *= diffuse_vec[2] * diffuse_vec[2];
+
+                // Alpha test
+                if is_alpha_tested {
+                    let alpha = diffuse_vec[3];
+                    out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
+
+                    // Now do late Z
+                    (out_depth, out_mask) = self.depth_test(p.x, p.y, z, out_mask);
+                    if !out_mask.any() {
+                        return;
+                    }
+                }
             }
         } else {
-            // TODO: Handle missing material
+            // Missing material
+            // TODO: Guarantee a default material instead?
         }
 
         // Clamp final colors before packing
@@ -358,7 +386,7 @@ impl TileRasterizer {
                 | ((color_b.w * 255.0) as u32),
         );
 
-        self.write_pixels(p.x, p.y, packed_colors, final_depth, final_mask);
+        self.write_pixels(p.x, p.y, packed_colors, out_depth, out_mask);
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
