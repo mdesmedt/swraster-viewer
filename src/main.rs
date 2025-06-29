@@ -8,6 +8,8 @@ use std::time::Instant;
 
 mod rendercamera;
 mod renderer;
+mod texture;
+mod tilerasterizer;
 
 // TODO: Remove dead code in the GLTF scene boilerplate module. This is just to stop rustc from complaining.
 #[allow(dead_code)]
@@ -15,7 +17,8 @@ mod scene;
 
 use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
-use scene::{compute_scene_bounds, Scene, TextureCache};
+use scene::{compute_scene_bounds, Scene};
+use texture::TextureCache;
 
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
@@ -82,8 +85,8 @@ fn main() {
             .map(|s| s.to_string())
             .unwrap_or_else(|| ".".to_string());
 
-        // Create texture cache for the scene with the correct base directory
-        let mut texture_cache = TextureCache::with_base_dir(base_dir);
+        // Create texture cache for the scene
+        let mut texture_cache = TextureCache::new(base_dir);
         let scene = Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache)
             .expect("Failed to create scene from GLTF");
 
