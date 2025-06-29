@@ -109,28 +109,16 @@ impl RenderCamera {
 
     fn compute_view_clip_planes(&self) -> [Vec4; 6] {
         let aspect_ratio = self.width / self.height;
-        let fov_half = self.fov * 0.5;
-        let near_half_height = self.near * fov_half.tan();
-        let near_half_width = near_half_height * aspect_ratio;
+        let tan_y = (self.fov * 0.5).tan();
+        let tan_x = tan_y * aspect_ratio;
         
-        // Left plane: (1, 0, -near_half_width/self.near, 0)
-        let left = Vec4::new(1.0, 0.0, -near_half_width / self.near, 0.0);
-        
-        // Right plane: (-1, 0, -near_half_width/self.near, 0)
-        let right = Vec4::new(-1.0, 0.0, -near_half_width / self.near, 0.0);
-        
-        // Bottom plane: (0, 1, -near_half_height/self.near, 0)
-        let bottom = Vec4::new(0.0, 1.0, -near_half_height / self.near, 0.0);
-        
-        // Top plane: (0, -1, -near_half_height/self.near, 0)
-        let top = Vec4::new(0.0, -1.0, -near_half_height / self.near, 0.0);
-        
-        // Near plane: (0, 0, -1, -self.near)
         let near = Vec4::new(0.0, 0.0, -1.0, -self.near);
-        
-        // Far plane: (0, 0, 1, self.far)
         let far = Vec4::new(0.0, 0.0, 1.0, self.far);
+        let right = Vec4::new(1.0, 0.0, -tan_x, 0.0).normalize();
+        let left = Vec4::new(-1.0, 0.0, -tan_x, 0.0).normalize();
+        let top = Vec4::new(0.0, 1.0, -tan_y, 0.0).normalize();
+        let bottom = Vec4::new(0.0, -1.0, -tan_y, 0.0).normalize();
         
-        [left, right, bottom, top, near, far]
+        [near, far, right, left, top, bottom]
     }
 }
