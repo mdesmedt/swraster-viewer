@@ -1,7 +1,7 @@
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use crossbeam_channel::{unbounded, Sender, TrySendError};
+use crossbeam_channel::{bounded, Sender};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::ops::{Add, Mul};
@@ -114,7 +114,7 @@ pub struct TileBinner {
 // Creates both the binner and the rasterizer tiles for specified screen bounds
 // The binner contains the sender and the rasterizer contains the receiver for the channel
 fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> (TileBinner, TileRasterizer) {
-    let (triangle_sender, triangle_receiver) = unbounded();
+    let (triangle_sender, triangle_receiver) = bounded(1024);
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
     let width_vec4 = (width + 3) / 4;
@@ -195,27 +195,26 @@ impl Renderer {
         buffer: &mut RenderBuffer,
     ) {
         // Using a thread scope here to ensure that the rasterizer threads are joined
-        rayon::scope(|scope| {
-            // Spawn rasterizers
-            scope.spawn(|_| {
-                self.tiles_rasterizer.par_iter().for_each(|rasterizer| {
-                    let mut rasterizer_mutable = rasterizer.lock().unwrap();
+        std::thread::scope(|scope| {
+            // Kick off the rasterizer threads which start listening to their channels
+            for rasterizer in &self.tiles_rasterizer {
+                let rasterizer_clone = rasterizer.clone();
+                scope.spawn(move || {
+                    let mut rasterizer_mutable = rasterizer_clone.lock().unwrap();
                     rasterizer_mutable.begin_rasterization(scene);
                 });
-            });
+            }
 
             // Clip and bin primitives in each node in the scene in parallel
-            scope.spawn(|_| {
-                scene.root_nodes.par_iter().for_each(|node_index| {
-                    let node = &scene.nodes[*node_index];
-                    self.render_node(
-                        scene,
-                        camera,
-                        node,
-                        Mat4::IDENTITY,
-                        camera.view_project_matrix,
-                    );
-                });
+            scene.root_nodes.par_iter().for_each(|node_index| {
+                let node = &scene.nodes[*node_index];
+                self.render_node(
+                    scene,
+                    camera,
+                    node,
+                    Mat4::IDENTITY,
+                    camera.view_project_matrix,
+                );
             });
 
             // Send the termination message to all channels
@@ -620,28 +619,20 @@ impl Renderer {
                     if tile_clipped_min.x < tile_clipped_max.x
                         && tile_clipped_min.y < tile_clipped_max.y
                     {
-                        loop {
-                            // Create a RasterPacket clipped to the tile
-                            let packet = RasterPacket {
-                                screen_min: tile_clipped_min,
-                                screen_max: tile_clipped_max,
-                                pos_screen: [p0, p1, p2],
-                                z_over_w: z_over_w,
-                                one_over_w: one_over_w,
-                                normal_over_w: normal_over_w,
-                                uv_over_w: uv_over_w,
-                                primitive_index: triangle.primitive_index,
-                                mesh_index: triangle.mesh_index,
-                                one_over_area_vec: Vec4::splat(1.0 / signed_area as f32),
-                            };
-                            match binner.channel.try_send(RasterMessage::Packet(packet)) {
-                                Ok(_) => break,
-                                Err(TrySendError::Full(_)) => {
-                                    rayon::yield_now();
-                                }
-                                Err(TrySendError::Disconnected(_)) => break,
-                            };
-                        }
+                        // Create a RasterPacket clipped to the tile
+                        let packet = RasterPacket {
+                            screen_min: tile_clipped_min,
+                            screen_max: tile_clipped_max,
+                            pos_screen: [p0, p1, p2],
+                            z_over_w: z_over_w,
+                            one_over_w: one_over_w,
+                            normal_over_w: normal_over_w,
+                            uv_over_w: uv_over_w,
+                            primitive_index: triangle.primitive_index,
+                            mesh_index: triangle.mesh_index,
+                            one_over_area_vec: Vec4::splat(1.0 / signed_area as f32),
+                        };
+                        binner.channel.send(RasterMessage::Packet(packet)).ok();
                     }
                 }
             }
