@@ -1,6 +1,6 @@
 use crate::renderer::{RasterMessage, RasterPacket, RenderBuffer};
 use crate::scene::{Material, Scene};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, TryRecvError};
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 
 // The tile which the rasterizer uses to consume work
@@ -52,10 +52,13 @@ impl TileRasterizer {
         self.clear();
         // Then start listening to the channel
         loop {
-            match self.channel.recv() {
+            match self.channel.try_recv() {
                 Ok(RasterMessage::Packet(packet)) => self.rasterize_packet(scene, packet),
                 Ok(RasterMessage::Terminate) => break,
-                Err(_) => break, // Channel was closed
+                Err(TryRecvError::Empty) => {
+                    rayon::yield_now();
+                }
+                Err(TryRecvError::Disconnected) => break, // Channel was closed
             }
         }
     }
