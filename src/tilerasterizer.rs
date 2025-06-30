@@ -25,17 +25,16 @@ impl TileRasterizer {
                 let src_index = y * width_vec4 + x_vec4;
                 let dst_y = self.screen_min.y + y as i32;
 
-                if dst_y >= 0 && dst_y < buffer.height as i32 {
-                    let colors = self.color[src_index].to_array();
-                    let dst_base_x = self.screen_min.x + x_vec4 as i32 * 4;
+                let colors = self.color[src_index].to_array();
+                let dst_base_x = self.screen_min.x + x_vec4 as i32 * 4;
 
-                    // Copy each component of the Vec4 to individual pixels
-                    for i in 0..4 {
-                        let pixel_x = dst_base_x + i as i32;
-                        if pixel_x >= 0 && pixel_x < buffer.width as i32 {
-                            let dst_index = dst_y as usize * buffer.width + pixel_x as usize;
-                            buffer.pixels[dst_index] = colors[i as usize];
-                        }
+                // Copy each component of the Vec4 to individual pixels
+                for i in 0..4 {
+                    let pixel_x = dst_base_x + i as i32;
+                    let dst_index = dst_y as usize * buffer.width + pixel_x as usize;
+                    // Need to check here because the buffer is not guaranteed to match our vec4 alignment
+                    if dst_index < buffer.pixels.len() {
+                        buffer.pixels[dst_index] = colors[i as usize];
                     }
                 }
             }
@@ -81,7 +80,7 @@ impl TileRasterizer {
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
         let material: Option<&Material> = scene.materials.get(material_index.unwrap());
-        
+
         // Determine whether we can do early z testing
         let is_alpha_tested = if let Some(material) = material {
             material.is_alpha_tested
@@ -234,7 +233,6 @@ impl TileRasterizer {
             bary1,
             bary2,
         ) * w;
-
 
         let mut out_depth = Vec4::splat(f32::INFINITY);
         let mut out_mask = mask;
@@ -396,26 +394,19 @@ impl TileRasterizer {
         let width = (self.screen_max.x - self.screen_min.x) as usize;
         let width_vec4 = (width + 3) / 4;
 
-        let mut final_depth = depth;
-        let mut final_mask = mask;
+        // x is the leftmost pixel of the 4-pixel SIMD block
+        let local_x = x - self.screen_min.x;
+        let vec4_index = local_x as usize / 4;
 
-        if local_y >= 0 && local_y < (self.screen_max.y - self.screen_min.y) as i32 {
-            // x is the leftmost pixel of the 4-pixel SIMD block
-            let local_x = x - self.screen_min.x;
-            let vec4_index = local_x as usize / 4;
-
-            if vec4_index < width_vec4 {
-                let index = local_y as usize * width_vec4 + vec4_index;
-                // Load current depth values
-                let current_depth = self.depth[index];
-                // Perform depth test
-                let mask_depth = depth.cmple(current_depth);
-                // Create final mask which determines which pixels to shade and write
-                final_mask &= mask_depth;
-                // Do the depth select here because we already have everything we need
-                final_depth = Vec4::select(final_mask, depth, current_depth);
-            }
-        }
+        let index = local_y as usize * width_vec4 + vec4_index;
+        // Load current depth values
+        let current_depth = self.depth[index];
+        // Perform depth test
+        let mask_depth = depth.cmple(current_depth);
+        // Create final mask which determines which pixels to shade and write
+        let final_mask = mask & mask_depth;
+        // Do the depth select here because we already have everything we need
+        let final_depth = Vec4::select(final_mask, depth, current_depth);
 
         (final_depth, final_mask)
     }
@@ -434,20 +425,19 @@ impl TileRasterizer {
         let width = (self.screen_max.x - self.screen_min.x) as usize;
         let width_vec4 = (width + 3) / 4;
 
-        if local_y >= 0 && local_y < (self.screen_max.y - self.screen_min.y) as i32 {
-            // x is the leftmost pixel of the 4-pixel SIMD block
-            let local_x = x - self.screen_min.x;
-            let vec4_index = local_x as usize / 4;
+        // x is the leftmost pixel of the 4-pixel SIMD block
+        let local_x = x - self.screen_min.x;
+        let vec4_index = local_x as usize / 4;
+        let index = local_y as usize * width_vec4 + vec4_index;
+        let booleans: [bool; 4] = final_mask.into();
+        let mask_bvec4 = BVec4::from(booleans);
 
-            if vec4_index < width_vec4 {
-                let index = local_y as usize * width_vec4 + vec4_index;
-                let booleans: [bool; 4] = final_mask.into();
-                let mask_bvec4 = BVec4::from(booleans);
-                let current_color = self.color[index];
-                let final_color = UVec4::select(mask_bvec4, color, current_color);
-                self.color[index] = final_color;
-                self.depth[index] = final_depth;
-            }
-        }
+        // Select final color
+        let current_color = self.color[index];
+        let final_color = UVec4::select(mask_bvec4, color, current_color);
+        
+        // Write color and depth
+        self.color[index] = final_color;
+        self.depth[index] = final_depth;
     }
 }

@@ -111,14 +111,14 @@ impl RenderCamera {
         let aspect_ratio = self.width / self.height;
         let tan_y = (self.fov * 0.5).tan();
         let tan_x = tan_y * aspect_ratio;
-        
+
         let near = Vec4::new(0.0, 0.0, -1.0, -self.near);
         let far = Vec4::new(0.0, 0.0, 1.0, self.far);
         let right = Vec4::new(1.0, 0.0, -tan_x, 0.0).normalize();
         let left = Vec4::new(-1.0, 0.0, -tan_x, 0.0).normalize();
         let top = Vec4::new(0.0, 1.0, -tan_y, 0.0).normalize();
         let bottom = Vec4::new(0.0, -1.0, -tan_y, 0.0).normalize();
-        
+
         [near, far, right, left, top, bottom]
     }
 }

@@ -296,10 +296,7 @@ fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
     let center = min.midpoint(max);
     let radius = (max - min).length() / 2.0;
 
-    BoundingSphere {
-        center,
-        radius,
-    }
+    BoundingSphere { center, radius }
 }
 
 fn get_texture_and_sampler(

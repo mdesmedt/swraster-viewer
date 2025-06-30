@@ -222,7 +222,13 @@ impl Renderer {
         }
     }
 
-    fn render_node(&self, scene: &Scene, camera: &RenderCamera, node: &Node, view_project_matrix: Mat4) {
+    fn render_node(
+        &self,
+        scene: &Scene,
+        camera: &RenderCamera,
+        node: &Node,
+        view_project_matrix: Mat4,
+    ) {
         // Compute projection matrix
         let model_matrix = node.transform;
         let mvp_matrix = view_project_matrix * model_matrix;
@@ -232,7 +238,14 @@ impl Renderer {
 
         // Render the node's mesh if it has one
         if let Some(mesh_index) = node.mesh_index {
-            self.render_mesh(scene, camera, mesh_index, model_matrix, mvp_matrix, rotation_matrix);
+            self.render_mesh(
+                scene,
+                camera,
+                mesh_index,
+                model_matrix,
+                mvp_matrix,
+                rotation_matrix,
+            );
         }
 
         // Recursively render child nodes in parallel

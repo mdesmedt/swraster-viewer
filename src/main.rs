@@ -121,9 +121,15 @@ fn main() {
             })
             .sum();
 
-        let total_primitives: usize = scene.nodes.iter().map(|node| {
-            node.mesh_index.map(|mesh_index| scene.meshes[mesh_index].primitives.len()).unwrap_or(0)
-        }).sum();
+        let total_primitives: usize = scene
+            .nodes
+            .iter()
+            .map(|node| {
+                node.mesh_index
+                    .map(|mesh_index| scene.meshes[mesh_index].primitives.len())
+                    .unwrap_or(0)
+            })
+            .sum();
 
         // Calculate texture statistics
         let unique_textures = texture_cache.unique_texture_count();
