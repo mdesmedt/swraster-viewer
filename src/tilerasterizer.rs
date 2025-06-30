@@ -1,4 +1,4 @@
-use crate::renderer::{RasterPacket, RenderBuffer};
+use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
 use crossbeam::queue::SegQueue;
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
@@ -14,43 +14,15 @@ pub struct TileRasterizer {
 }
 
 impl TileRasterizer {
-    // Copy the tile to the render buffer
-    pub fn copy_to_buffer(&self, buffer: &mut RenderBuffer) {
-        let width = (self.screen_max.x - self.screen_min.x) as usize;
-        let height = (self.screen_max.y - self.screen_min.y) as usize;
-        let width_vec4 = (width + 3) / 4;
-
-        for y in 0..height {
-            for x_vec4 in 0..width_vec4 {
-                let src_index = y * width_vec4 + x_vec4;
-                let dst_y = self.screen_min.y + y as i32;
-
-                let colors = self.color[src_index].to_array();
-                let dst_base_x = self.screen_min.x + x_vec4 as i32 * 4;
-
-                // Copy each component of the Vec4 to individual pixels
-                for i in 0..4 {
-                    let pixel_x = dst_base_x + i as i32;
-                    let dst_index = dst_y as usize * buffer.width + pixel_x as usize;
-                    // Need to check here because the buffer is not guaranteed to match our vec4 alignment
-                    if dst_index < buffer.pixels.len() {
-                        buffer.pixels[dst_index] = colors[i as usize];
-                    }
-                }
-            }
-        }
-    }
-
     fn clear(&mut self) {
         self.color.fill(UVec4::ZERO);
         self.depth.fill(Vec4::splat(f32::INFINITY));
     }
 
-    // Begin rasterization and start listening to the channel
     pub fn rasterize_packets(&mut self, scene: &Scene) {
         // Clear the tile first
         self.clear();
-        // Then start listening to the channel
+        // Then consume all packets in the queue
         while let Some(packet) = self.packets.pop() {
             self.rasterize_packet(scene, packet);
         }

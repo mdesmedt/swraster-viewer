@@ -175,17 +175,50 @@ impl Renderer {
             );
         });
 
-        // Then rasterize each bin in parallel
+        // Rasterize each bin
         // One thread per bin avoids having to lock the tile constantly
         self.tiles.par_iter_mut().for_each(|tile| {
             tile.rasterize_packets(scene);
         });
 
-        // Copy all tile pixels to the main buffer serially
-        // TODO: Multithread this by slicing the buffer somehow?
-        for tile in &self.tiles {
-            tile.copy_to_buffer(buffer);
-        }
+        // Copy all tiles pixels to the backbuffer
+        let tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
+        buffer
+            .pixels
+            .par_chunks_mut(buffer.width)
+            .enumerate()
+            .for_each(|(y, buffer_row)| {
+                let y = y as i32;
+                let tile_y = y / TILE_SIZE;
+
+                // Iterate through all tiles in this row
+                for tile_x in 0..tiles_x {
+                    let tile_index = tile_y * tiles_x + tile_x;
+                    let tile = &self.tiles[tile_index as usize];
+
+                    // Calculate the local y coordinate within this tile
+                    let local_y = y - tile.screen_min.y;
+
+                    let tile_width = (tile.screen_max.x - tile.screen_min.x) as usize;
+                    let width_vec4 = (tile_width + 3) / 4;
+
+                    // Copy pixels from the tile row to the buffer row
+                    let tile_row_index = local_y as usize * width_vec4;
+                    for x_vec4 in 0..width_vec4 {
+                        let src_index = tile_row_index + x_vec4;
+                        let dst_base_x = tile.screen_min.x + x_vec4 as i32 * 4;
+
+                        // Copy each component of the Vec4 to individual pixels
+                        let colors = tile.color[src_index].to_array();
+                        for i in 0..4 {
+                            let pixel_x = dst_base_x + i as i32;
+                            if pixel_x < self.width {
+                                buffer_row[pixel_x as usize] = colors[i as usize];
+                            }
+                        }
+                    }
+                }
+            });
     }
 
     fn render_node(
