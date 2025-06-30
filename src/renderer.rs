@@ -1,7 +1,7 @@
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{bounded, Sender};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -113,7 +113,7 @@ pub struct TileBinner {
 // Creates both the binner and the rasterizer tiles for specified screen bounds
 // The binner contains the sender and the rasterizer contains the receiver for the channel
 fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> (TileBinner, TileRasterizer) {
-    let (triangle_sender, triangle_receiver) = unbounded();
+    let (triangle_sender, triangle_receiver) = bounded(1024);
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
     let width_vec4 = (width + 3) / 4;
