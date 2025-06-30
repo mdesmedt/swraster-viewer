@@ -4,6 +4,7 @@ use crate::tilerasterizer::TileRasterizer;
 use crossbeam_channel::{bounded, Sender};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
+use std::ops::{Add, Mul};
 use std::sync::{Arc, Mutex};
 
 /******************************************************************************
@@ -133,6 +134,7 @@ fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> (TileBinner, Tile
     )
 }
 
+#[inline]
 fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> bool {
     // Transform the sphere to view space
     let center_view = camera.view_matrix * sphere.center.extend(1.0);
@@ -335,9 +337,9 @@ impl Renderer {
                 let world2 = positions[i2];
 
                 // Project vertices to clip space
-                let clip0 = mvp_matrix * Vec4::new(world0[0], world0[1], world0[2], 1.0);
-                let clip1 = mvp_matrix * Vec4::new(world1[0], world1[1], world1[2], 1.0);
-                let clip2 = mvp_matrix * Vec4::new(world2[0], world2[1], world2[2], 1.0);
+                let clip0 = mvp_matrix * world0.extend(1.0);
+                let clip1 = mvp_matrix * world1.extend(1.0);
+                let clip2 = mvp_matrix * world2.extend(1.0);
 
                 // Read normals
                 let normal0 = normals[i0];
@@ -390,11 +392,13 @@ impl Renderer {
         ];
 
         // Test if a vertex is inside a plane
+        #[inline]
         fn is_inside(v: Vec4, plane: Vec4) -> bool {
             plane.dot(v) >= 0.0
         }
 
         // Intersect edge with plane
+        #[inline]
         fn intersect(v0: ClipVertex, v1: ClipVertex, plane: Vec4) -> ClipVertex {
             let d0 = plane.dot(v0.position);
             let d1 = plane.dot(v1.position);
@@ -457,36 +461,62 @@ impl Renderer {
         if poly_len < 3 {
             return;
         }
+
+        #[inline]
+        fn interp<T>(a: T, b: T, c: T, barycentric: Vec3A) -> T
+        where
+            T: Copy + Add<Output = T> + Mul<f32, Output = T>,
+        {
+            a * barycentric.x + b * barycentric.y + c * barycentric.z
+        }
+
         for i in 1..poly_len - 1 {
             // Interpolate the vertex attributes
-            // TODO: Clean up this code
             let triangle = Triangle {
                 v0: Vertex {
                     position: poly[0].position,
-                    normal: poly[0].barycentric.x * triangle.v0.normal
-                        + poly[0].barycentric.y * triangle.v1.normal
-                        + poly[0].barycentric.z * triangle.v2.normal,
-                    texcoords: poly[0].barycentric.x * triangle.v0.texcoords
-                        + poly[0].barycentric.y * triangle.v1.texcoords
-                        + poly[0].barycentric.z * triangle.v2.texcoords,
+                    normal: interp(
+                        triangle.v0.normal,
+                        triangle.v1.normal,
+                        triangle.v2.normal,
+                        poly[0].barycentric,
+                    ),
+                    texcoords: interp(
+                        triangle.v0.texcoords,
+                        triangle.v1.texcoords,
+                        triangle.v2.texcoords,
+                        poly[0].barycentric,
+                    ),
                 },
                 v1: Vertex {
                     position: poly[i].position,
-                    normal: poly[i].barycentric.x * triangle.v0.normal
-                        + poly[i].barycentric.y * triangle.v1.normal
-                        + poly[i].barycentric.z * triangle.v2.normal,
-                    texcoords: poly[i].barycentric.x * triangle.v0.texcoords
-                        + poly[i].barycentric.y * triangle.v1.texcoords
-                        + poly[i].barycentric.z * triangle.v2.texcoords,
+                    normal: interp(
+                        triangle.v0.normal,
+                        triangle.v1.normal,
+                        triangle.v2.normal,
+                        poly[i].barycentric,
+                    ),
+                    texcoords: interp(
+                        triangle.v0.texcoords,
+                        triangle.v1.texcoords,
+                        triangle.v2.texcoords,
+                        poly[i].barycentric,
+                    ),
                 },
                 v2: Vertex {
                     position: poly[i + 1].position,
-                    normal: poly[i + 1].barycentric.x * triangle.v0.normal
-                        + poly[i + 1].barycentric.y * triangle.v1.normal
-                        + poly[i + 1].barycentric.z * triangle.v2.normal,
-                    texcoords: poly[i + 1].barycentric.x * triangle.v0.texcoords
-                        + poly[i + 1].barycentric.y * triangle.v1.texcoords
-                        + poly[i + 1].barycentric.z * triangle.v2.texcoords,
+                    normal: interp(
+                        triangle.v0.normal,
+                        triangle.v1.normal,
+                        triangle.v2.normal,
+                        poly[i + 1].barycentric,
+                    ),
+                    texcoords: interp(
+                        triangle.v0.texcoords,
+                        triangle.v1.texcoords,
+                        triangle.v2.texcoords,
+                        poly[i + 1].barycentric,
+                    ),
                 },
                 mesh_index: triangle.mesh_index,
                 primitive_index: triangle.primitive_index,

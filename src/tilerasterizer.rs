@@ -182,6 +182,7 @@ impl TileRasterizer {
     }
 
     // "Pixel shader" for the rasterizer. Shades 4 pixels simultaneously.
+    #[inline]
     fn shade_pixels(
         &mut self,
         p: IVec2,
@@ -202,6 +203,7 @@ impl TileRasterizer {
         let bary2: Vec4 = w2 * packet.one_over_area_vec;
 
         // Helper function for attribute interpolation
+        #[inline]
         fn interpolate_vertex_attribute(
             a: f32,
             b: f32,
@@ -353,6 +355,7 @@ impl TileRasterizer {
         color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
         color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
+        #[inline]
         fn linear_to_srgb(color: Vec4) -> Vec4 {
             // Apply gamma 2.0 instead of 2.2 for perf
             Vec4::new(
@@ -388,6 +391,7 @@ impl TileRasterizer {
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
+    #[inline]
     fn depth_test(&mut self, x: i32, y: i32, depth: Vec4, mask: BVec4A) -> (Vec4, BVec4A) {
         debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
         let local_y = y - self.screen_min.y;
@@ -412,6 +416,7 @@ impl TileRasterizer {
     }
 
     // Perform depth test and write color and depth
+    #[inline]
     fn write_pixels(
         &mut self,
         x: i32,
@@ -435,7 +440,7 @@ impl TileRasterizer {
         // Select final color
         let current_color = self.color[index];
         let final_color = UVec4::select(mask_bvec4, color, current_color);
-        
+
         // Write color and depth
         self.color[index] = final_color;
         self.depth[index] = final_depth;
