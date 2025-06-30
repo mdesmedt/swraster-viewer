@@ -1,11 +1,10 @@
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use crossbeam_channel::{bounded, Sender};
+use crossbeam::queue::SegQueue;
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::ops::{Add, Mul};
-use std::sync::{Arc, Mutex};
 
 /******************************************************************************
  * This is the main code of this project. A simple software rasterizer.
@@ -21,6 +20,8 @@ use std::sync::{Arc, Mutex};
  * The renderer is multithreaded and uses SIMD to process 4 pixels (in X) at a time.
  * Materials and textures are not supported yet.
 ******************************************************************************/
+
+const TILE_SIZE: i32 = 64;
 
 pub struct RenderBuffer {
     pub width: usize,
@@ -74,11 +75,6 @@ pub struct RasterPacket {
     pub mesh_index: usize,
 }
 
-pub enum RasterMessage {
-    Packet(RasterPacket),
-    Terminate,
-}
-
 impl RenderBuffer {
     pub fn new(width: usize, height: usize) -> Self {
         Self {
@@ -103,35 +99,19 @@ impl RenderBuffer {
     }
 }
 
-// The tile which the binner uses to send work
-// This is a separate struct from the TileRaster to make ownership easier
-pub struct TileBinner {
-    pub screen_min: IVec2,
-    pub screen_max: IVec2,
-    pub channel: Sender<RasterMessage>,
-}
-
 // Creates both the binner and the rasterizer tiles for specified screen bounds
 // The binner contains the sender and the rasterizer contains the receiver for the channel
-fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> (TileBinner, TileRasterizer) {
-    let (triangle_sender, triangle_receiver) = bounded(1024);
+fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> TileRasterizer {
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
     let width_vec4 = (width + 3) / 4;
-    (
-        TileBinner {
-            screen_min,
-            screen_max,
-            channel: triangle_sender,
-        },
-        TileRasterizer {
-            screen_min,
-            screen_max,
-            channel: triangle_receiver,
-            color: vec![UVec4::ZERO; width_vec4 * height],
-            depth: vec![Vec4::splat(f32::INFINITY); width_vec4 * height],
-        },
-    )
+    TileRasterizer {
+        screen_min,
+        screen_max,
+        packets: SegQueue::new(),
+        color: vec![UVec4::ZERO; width_vec4 * height],
+        depth: vec![Vec4::splat(f32::INFINITY); width_vec4 * height],
+    }
 }
 
 #[inline]
@@ -152,38 +132,30 @@ fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> bool {
 pub struct Renderer {
     width: i32,
     height: i32,
-    tile_width: i32,
-    tile_height: i32,
-    tiles_binner: Vec<TileBinner>,
-    tiles_rasterizer: Vec<Arc<Mutex<TileRasterizer>>>,
+    tiles: Vec<TileRasterizer>,
 }
 
 impl Renderer {
     pub fn new(width: i32, height: i32) -> Self {
         // Compute the number of tiles
-        let tile_width = 128;
-        let tile_height = 128;
+        let tile_width = TILE_SIZE;
+        let tile_height = TILE_SIZE;
         let tiles_x = (width + tile_width - 1) / tile_width;
         let tiles_y = (height + tile_height - 1) / tile_height;
         // Create the tiles
-        let mut tiles_binner = vec![];
-        let mut tiles_rasterizer = vec![];
+        let mut tiles = vec![];
         for y in 0..tiles_y {
             for x in 0..tiles_x {
                 let screen_min = IVec2::new(x * tile_width, y * tile_height);
                 let screen_max = IVec2::new((x + 1) * tile_width, (y + 1) * tile_height);
-                let (binner, rasterizer) = create_screen_tile(screen_min, screen_max);
-                tiles_binner.push(binner);
-                tiles_rasterizer.push(Arc::new(Mutex::new(rasterizer)));
+                let tile = create_screen_tile(screen_min, screen_max);
+                tiles.push(tile);
             }
         }
         Self {
             width,
             height,
-            tile_width,
-            tile_height,
-            tiles_binner: tiles_binner,
-            tiles_rasterizer,
+            tiles,
         }
     }
 
@@ -194,40 +166,28 @@ impl Renderer {
         camera: &RenderCamera,
         buffer: &mut RenderBuffer,
     ) {
-        // Using a thread scope here to ensure that the rasterizer threads are joined
-        std::thread::scope(|scope| {
-            // Kick off the rasterizer threads which start listening to their channels
-            for rasterizer in &self.tiles_rasterizer {
-                let rasterizer_clone = rasterizer.clone();
-                scope.spawn(move || {
-                    let mut rasterizer_mutable = rasterizer_clone.lock().unwrap();
-                    rasterizer_mutable.begin_rasterization(scene);
-                });
-            }
+        // Clip and bin primitives in each node in the scene in parallel
+        scene.root_nodes.par_iter().for_each(|node_index| {
+            let node = &scene.nodes[*node_index];
+            self.render_node(
+                scene,
+                camera,
+                node,
+                Mat4::IDENTITY,
+                camera.view_project_matrix,
+            );
+        });
 
-            // Clip and bin primitives in each node in the scene in parallel
-            scene.root_nodes.par_iter().for_each(|node_index| {
-                let node = &scene.nodes[*node_index];
-                self.render_node(
-                    scene,
-                    camera,
-                    node,
-                    Mat4::IDENTITY,
-                    camera.view_project_matrix,
-                );
-            });
-
-            // Send the termination message to all channels
-            for binner in &self.tiles_binner {
-                binner.channel.send(RasterMessage::Terminate).ok();
-            }
+        // Then rasterize each bin in parallel
+        // One thread per bin avoids having to lock the tile constantly
+        self.tiles.par_iter_mut().for_each(|tile| {
+            tile.rasterize_packets(scene);
         });
 
         // Copy all tile pixels to the main buffer serially
         // TODO: Multithread this by slicing the buffer somehow?
-        for tile in &self.tiles_rasterizer {
-            let rasterizer_guard = tile.lock().unwrap();
-            rasterizer_guard.copy_to_buffer(buffer);
+        for tile in &self.tiles {
+            tile.copy_to_buffer(buffer);
         }
     }
 
@@ -590,20 +550,20 @@ impl Renderer {
         );
 
         // Calculate which bins intersect with the triangle's bounding box
-        let min_bin_x = screen_min.x / self.tile_width;
-        let min_bin_y = screen_min.y / self.tile_height;
-        let max_bin_x = (screen_max.x + self.tile_width - 1) / self.tile_width;
-        let max_bin_y = (screen_max.y + self.tile_height - 1) / self.tile_height;
+        let min_bin_x = screen_min.x / TILE_SIZE;
+        let min_bin_y = screen_min.y / TILE_SIZE;
+        let max_bin_x = (screen_max.x + TILE_SIZE - 1) / TILE_SIZE;
+        let max_bin_y = (screen_max.y + TILE_SIZE - 1) / TILE_SIZE;
 
         // Calculate number of bins in x direction
-        let bins_x = (self.width + self.tile_width - 1) / self.tile_width;
+        let bins_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
 
         // Send the packet to all intersecting bins
         for y in min_bin_y..max_bin_y {
             for x in min_bin_x..max_bin_x {
                 let bin_index = y * bins_x + x;
-                if bin_index >= 0 && bin_index < self.tiles_binner.len() as i32 {
-                    let binner = &self.tiles_binner[bin_index as usize];
+                if bin_index >= 0 && bin_index < self.tiles.len() as i32 {
+                    let binner = &self.tiles[bin_index as usize];
 
                     // Clip the triangle bounds to this tile's bounds
                     let tile_clipped_min = IVec2::new(
@@ -632,7 +592,7 @@ impl Renderer {
                             mesh_index: triangle.mesh_index,
                             one_over_area_vec: Vec4::splat(1.0 / signed_area as f32),
                         };
-                        binner.channel.send(RasterMessage::Packet(packet)).ok();
+                        binner.packets.push(packet);
                     }
                 }
             }

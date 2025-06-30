@@ -1,6 +1,6 @@
-use crate::renderer::{RasterMessage, RasterPacket, RenderBuffer};
+use crate::renderer::{RasterPacket, RenderBuffer};
 use crate::scene::{Material, Scene};
-use crossbeam_channel::Receiver;
+use crossbeam::queue::SegQueue;
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 
 // The tile which the rasterizer uses to consume work
@@ -8,7 +8,7 @@ use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 pub struct TileRasterizer {
     pub screen_min: IVec2,
     pub screen_max: IVec2,
-    pub channel: Receiver<RasterMessage>,
+    pub packets: SegQueue<RasterPacket>,
     pub color: Vec<UVec4>,
     pub depth: Vec<Vec4>,
 }
@@ -47,16 +47,12 @@ impl TileRasterizer {
     }
 
     // Begin rasterization and start listening to the channel
-    pub fn begin_rasterization(&mut self, scene: &Scene) {
+    pub fn rasterize_packets(&mut self, scene: &Scene) {
         // Clear the tile first
         self.clear();
         // Then start listening to the channel
-        loop {
-            match self.channel.recv() {
-                Ok(RasterMessage::Packet(packet)) => self.rasterize_packet(scene, packet),
-                Ok(RasterMessage::Terminate) => break,
-                Err(_) => break, // Channel was closed
-            }
+        while let Some(packet) = self.packets.pop() {
+            self.rasterize_packet(scene, packet);
         }
     }
 
