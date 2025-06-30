@@ -18,7 +18,6 @@ use std::ops::{Add, Mul};
  *   5. At the end of rendering every tile gets copied to the final buffer
  *
  * The renderer is multithreaded and uses SIMD to process 4 pixels (in X) at a time.
- * Materials and textures are not supported yet.
 ******************************************************************************/
 
 const TILE_SIZE: i32 = 64;
@@ -138,16 +137,14 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(width: i32, height: i32) -> Self {
         // Compute the number of tiles
-        let tile_width = TILE_SIZE;
-        let tile_height = TILE_SIZE;
-        let tiles_x = (width + tile_width - 1) / tile_width;
-        let tiles_y = (height + tile_height - 1) / tile_height;
+        let tiles_x = (width + TILE_SIZE - 1) / TILE_SIZE;
+        let tiles_y = (height + TILE_SIZE - 1) / TILE_SIZE;
         // Create the tiles
         let mut tiles = vec![];
         for y in 0..tiles_y {
             for x in 0..tiles_x {
-                let screen_min = IVec2::new(x * tile_width, y * tile_height);
-                let screen_max = IVec2::new((x + 1) * tile_width, (y + 1) * tile_height);
+                let screen_min = IVec2::new(x * TILE_SIZE, y * TILE_SIZE);
+                let screen_max = IVec2::new((x + 1) * TILE_SIZE, (y + 1) * TILE_SIZE);
                 let tile = create_screen_tile(screen_min, screen_max);
                 tiles.push(tile);
             }
