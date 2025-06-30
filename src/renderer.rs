@@ -208,7 +208,13 @@ impl Renderer {
             // Clip and bin primitives in each node in the scene in parallel
             scene.root_nodes.par_iter().for_each(|node_index| {
                 let node = &scene.nodes[*node_index];
-                self.render_node(scene, camera, node, Mat4::IDENTITY, camera.view_project_matrix);
+                self.render_node(
+                    scene,
+                    camera,
+                    node,
+                    Mat4::IDENTITY,
+                    camera.view_project_matrix,
+                );
             });
 
             // Send the termination message to all channels

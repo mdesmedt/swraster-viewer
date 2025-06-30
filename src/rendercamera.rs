@@ -114,10 +114,10 @@ impl RenderCamera {
 
         let near = Vec4::new(0.0, 0.0, -1.0, -self.near);
         let far = Vec4::new(0.0, 0.0, 1.0, self.far);
-        let right = Vec4::new(1.0, 0.0, -tan_x, 0.0).normalize();
-        let left = Vec4::new(-1.0, 0.0, -tan_x, 0.0).normalize();
-        let top = Vec4::new(0.0, 1.0, -tan_y, 0.0).normalize();
-        let bottom = Vec4::new(0.0, -1.0, -tan_y, 0.0).normalize();
+        let right = Vec3::new(1.0, 0.0, -tan_x).normalize().extend(0.0);
+        let left = Vec3::new(-1.0, 0.0, -tan_x).normalize().extend(0.0);
+        let top = Vec3::new(0.0, 1.0, -tan_y).normalize().extend(0.0);
+        let bottom = Vec3::new(0.0, -1.0, -tan_y).normalize().extend(0.0);
 
         [near, far, right, left, top, bottom]
     }
