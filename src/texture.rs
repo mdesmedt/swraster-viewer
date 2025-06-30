@@ -59,15 +59,8 @@ impl TextureAndSampler {
     }
 
     pub fn sample_vec4(&self, u_vec: Vec4, v_vec: Vec4) -> [Vec4; 4] {
-        if self.texture.data.is_empty() {
-            // Return magenta for missing texture
-            let magenta = Vec4::new(1.0, 0.0, 1.0, 1.0);
-            return [magenta, magenta, magenta, magenta];
-        }
-
         // Sample four pixels
         let mut pixels = [Vec4::ZERO; 4];
-
         for i in 0..4 {
             // Apply wrap modes to UV coordinates
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
@@ -80,20 +73,16 @@ impl TextureAndSampler {
             // Get pixel index
             let pixel_index = ((y * self.texture.width + x) * 4) as usize;
 
-            if pixel_index + 3 >= self.texture.data.len() {
-                pixels[i] = Vec4::new(1.0, 0.0, 1.0, 1.0); // Magenta for out of bounds
-            } else {
-                // Read RGBA values and convert to float [0, 1]
-                let r = self.texture.data[pixel_index] as f32 / 255.0;
-                let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
-                let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
-                let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
+            // Read RGBA values and convert to float [0, 1]
+            let r = self.texture.data[pixel_index] as f32 / 255.0;
+            let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
+            let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
+            let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
 
-                pixels[i] = Vec4::new(r, g, b, a);
-            }
+            pixels[i] = Vec4::new(r, g, b, a);
         }
 
-        // Rearrange into [reds, greens, blues, alphas] format
+        // Transpose to [reds, greens, blues, alphas]
         [
             Vec4::new(pixels[0].x, pixels[1].x, pixels[2].x, pixels[3].x), // All reds
             Vec4::new(pixels[0].y, pixels[1].y, pixels[2].y, pixels[3].y), // All greens
