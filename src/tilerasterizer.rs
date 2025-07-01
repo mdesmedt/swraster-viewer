@@ -35,7 +35,7 @@ impl TileRasterizer {
         let mut p = IVec2::new(x_start, y_start);
 
         // Fetch the light
-        let mesh_index = packet.mesh_index;
+        let mesh_index = packet.mesh_index as usize;
         let mesh = &scene.meshes[mesh_index];
         let light = &mesh.light;
         let light_x = Vec4::splat(light.normal.x);
@@ -43,8 +43,7 @@ impl TileRasterizer {
         let light_z = Vec4::splat(light.normal.z);
 
         // Fetch the material
-        let primitive_index = packet.primitive_index;
-        let mesh_index = packet.mesh_index;
+        let primitive_index = packet.primitive_index as usize;
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
         let material: Option<&Material> = scene.materials.get(material_index.unwrap());
@@ -60,6 +59,8 @@ impl TileRasterizer {
         let p0 = packet.pos_screen[0];
         let p1 = packet.pos_screen[1];
         let p2 = packet.pos_screen[2];
+
+        let one_over_area_vec = Vec4::splat(packet.one_over_area);
 
         // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
@@ -128,6 +129,7 @@ impl TileRasterizer {
                         light_x,
                         light_y,
                         light_z,
+                        one_over_area_vec,
                         is_alpha_tested,
                         &packet,
                         material,
@@ -161,14 +163,15 @@ impl TileRasterizer {
         light_x: Vec4,
         light_y: Vec4,
         light_z: Vec4,
+        one_over_area_vec: Vec4,
         is_alpha_tested: bool,
         packet: &RasterPacket,
         material: Option<&Material>,
     ) {
         // Compute the barycentrics
-        let bary0: Vec4 = w0 * packet.one_over_area_vec;
-        let bary1: Vec4 = w1 * packet.one_over_area_vec;
-        let bary2: Vec4 = w2 * packet.one_over_area_vec;
+        let bary0: Vec4 = w0 * one_over_area_vec;
+        let bary1: Vec4 = w1 * one_over_area_vec;
+        let bary2: Vec4 = w2 * one_over_area_vec;
 
         // Helper function for attribute interpolation
         #[inline]

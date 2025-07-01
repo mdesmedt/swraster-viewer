@@ -66,12 +66,12 @@ pub struct RasterPacket {
     pub screen_max: IVec2,
     pub pos_screen: [Vec2; 3],
     pub z_over_w: [f32; 3],
+    pub one_over_area: f32,
     pub one_over_w: [f32; 3],
-    pub one_over_area_vec: Vec4,
+    pub primitive_index: u32,
     pub normal_over_w: [Vec3; 3],
     pub uv_over_w: [Vec2; 3],
-    pub primitive_index: usize,
-    pub mesh_index: usize,
+    pub mesh_index: u32,
 }
 
 impl RenderBuffer {
@@ -618,9 +618,9 @@ impl Renderer {
                             one_over_w: one_over_w,
                             normal_over_w: normal_over_w,
                             uv_over_w: uv_over_w,
-                            primitive_index: triangle.primitive_index,
-                            mesh_index: triangle.mesh_index,
-                            one_over_area_vec: Vec4::splat(1.0 / signed_area as f32),
+                            primitive_index: triangle.primitive_index as u32,
+                            mesh_index: triangle.mesh_index as u32,
+                            one_over_area: 1.0 / signed_area,
                         };
                         binner.packets.push(packet);
                     }
