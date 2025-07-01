@@ -52,11 +52,11 @@ impl<T> BumpPool<T> {
     }
 
     fn alloc_block(&self) -> usize {
-        if self.freelist.is_empty() {
-            self.blocks.push(BumpBlock::new())
+        if let Some(index) = self.freelist.pop() {
+            index
         }
         else {
-            self.freelist.pop().unwrap()
+            self.blocks.push(BumpBlock::new())
         }
     }
 
