@@ -1,10 +1,11 @@
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use crossbeam::queue::SegQueue;
+use crate::bumpqueue::{BumpPool, BumpQueue};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::ops::{Add, Mul};
+use std::sync::Arc;
 
 /******************************************************************************
  * This is the main code of this project. A simple software rasterizer.
@@ -61,6 +62,7 @@ impl ClipVertex {
 }
 
 // A packet containing a triangle sent from the clipper to the rasterizer for a tile
+#[derive(Clone, Copy)]
 pub struct RasterPacket {
     pub screen_min: IVec2,
     pub screen_max: IVec2,
@@ -100,14 +102,14 @@ impl RenderBuffer {
 
 // Creates both the binner and the rasterizer tiles for specified screen bounds
 // The binner contains the sender and the rasterizer contains the receiver for the channel
-fn create_screen_tile(screen_min: IVec2, screen_max: IVec2) -> TileRasterizer {
+fn create_screen_tile(screen_min: IVec2, screen_max: IVec2, pool: Arc<BumpPool<RasterPacket>>) -> TileRasterizer {
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
     let width_vec4 = (width + 3) / 4;
     TileRasterizer {
         screen_min,
         screen_max,
-        packets: SegQueue::new(),
+        packets: BumpQueue::new(pool),
         color: vec![UVec4::ZERO; width_vec4 * height],
         depth: vec![Vec4::splat(f32::INFINITY); width_vec4 * height],
     }
@@ -132,6 +134,7 @@ pub struct Renderer {
     width: i32,
     height: i32,
     tiles: Vec<TileRasterizer>,
+    packet_pool: Arc<BumpPool<RasterPacket>>,
 }
 
 impl Renderer {
@@ -139,13 +142,15 @@ impl Renderer {
         // Compute the number of tiles
         let tiles_x = (width + TILE_SIZE - 1) / TILE_SIZE;
         let tiles_y = (height + TILE_SIZE - 1) / TILE_SIZE;
+        // Create the packet pool
+        let packet_pool = Arc::new(BumpPool::new());
         // Create the tiles
         let mut tiles = vec![];
         for y in 0..tiles_y {
             for x in 0..tiles_x {
                 let screen_min = IVec2::new(x * TILE_SIZE, y * TILE_SIZE);
                 let screen_max = IVec2::new((x + 1) * TILE_SIZE, (y + 1) * TILE_SIZE);
-                let tile = create_screen_tile(screen_min, screen_max);
+                let tile = create_screen_tile(screen_min, screen_max, packet_pool.clone());
                 tiles.push(tile);
             }
         }
@@ -153,6 +158,7 @@ impl Renderer {
             width,
             height,
             tiles,
+            packet_pool,
         }
     }
 

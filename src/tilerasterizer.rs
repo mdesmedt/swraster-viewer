@@ -1,14 +1,14 @@
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use crossbeam::queue::SegQueue;
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
+use crate::bumpqueue::BumpQueue;
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
 pub struct TileRasterizer {
     pub screen_min: IVec2,
     pub screen_max: IVec2,
-    pub packets: SegQueue<RasterPacket>,
+    pub packets: BumpQueue<RasterPacket>,
     pub color: Vec<UVec4>,
     pub depth: Vec<Vec4>,
 }
@@ -26,6 +26,8 @@ impl TileRasterizer {
         while let Some(packet) = self.packets.pop() {
             self.rasterize_packet(scene, packet);
         }
+        // Reset the queue
+        self.packets.reset();
     }
 
     // Main rasterizer code

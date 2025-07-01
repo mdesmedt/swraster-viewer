@@ -13,6 +13,7 @@ mod rendercamera;
 mod renderer;
 mod texture;
 mod tilerasterizer;
+mod bumpqueue;
 
 // TODO: Remove dead code in the GLTF scene boilerplate module. This is just to stop rustc from complaining.
 #[allow(dead_code)]
