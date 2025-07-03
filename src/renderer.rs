@@ -170,13 +170,11 @@ impl Renderer {
         buffer: &mut RenderBuffer,
     ) {
         // Clip and bin primitives in each node in the scene in parallel
-        scene.root_nodes.par_iter().for_each(|node_index| {
-            let node = &scene.nodes[*node_index];
+        scene.nodes.par_iter().for_each(|node| {
             self.render_node(
                 scene,
                 camera,
                 node,
-                Mat4::IDENTITY,
                 camera.view_project_matrix,
             );
         });
@@ -232,15 +230,11 @@ impl Renderer {
         scene: &Scene,
         camera: &RenderCamera,
         node: &Node,
-        parent_transform: Mat4,
         view_project_matrix: Mat4,
     ) {
         // Compute projection matrix
-        let model_matrix = parent_transform * node.transform;
+        let model_matrix = node.transform;
         let mvp_matrix = view_project_matrix * model_matrix;
-
-        // Extract the rotation matrix from the model matrix for normal rotation to world space
-        let rotation_matrix = Mat3A::from_mat4(model_matrix);
 
         // Render the node's mesh if it has one
         if let Some(mesh_index) = node.mesh_index {
@@ -250,15 +244,8 @@ impl Renderer {
                 mesh_index,
                 model_matrix,
                 mvp_matrix,
-                rotation_matrix,
             );
         }
-
-        // Recursively render child nodes in parallel
-        node.children.par_iter().for_each(|&child_index| {
-            let child = &scene.nodes[child_index];
-            self.render_node(scene, camera, child, model_matrix, view_project_matrix);
-        });
     }
 
     fn render_mesh(
@@ -268,7 +255,6 @@ impl Renderer {
         mesh_index: usize,
         model_matrix: Mat4,
         mvp_matrix: Mat4,
-        rotation_matrix: Mat3A,
     ) {
         // Process primitives in parallel
         let mesh = &scene.meshes[mesh_index];
@@ -283,7 +269,6 @@ impl Renderer {
                     primitive_index,
                     model_matrix,
                     mvp_matrix,
-                    rotation_matrix,
                 );
             });
     }
@@ -297,7 +282,6 @@ impl Renderer {
         primitive_index: usize,
         model_matrix: Mat4,
         mvp_matrix: Mat4,
-        rotation_matrix: Mat3A,
     ) {
         let mesh = &scene.meshes[mesh_index];
         let primitive = &mesh.primitives[primitive_index];
@@ -352,6 +336,7 @@ impl Renderer {
                 let normal2 = normals[i2];
 
                 // Rotate normals to world space
+                let rotation_matrix = Mat3A::from_mat4(model_matrix);
                 let normal_world0 = rotation_matrix * normal0;
                 let normal_world1 = rotation_matrix * normal1;
                 let normal_world2 = rotation_matrix * normal2;

@@ -35,15 +35,13 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     pub materials: Vec<Material>,
     pub cameras: Vec<SceneCamera>,
-    pub root_nodes: Vec<usize>, // Indices into nodes array
 }
 
 pub struct Node {
     pub name: Option<String>,
-    pub transform: Mat4, // Model matrix
+    pub transform: Mat4, // Local to world matrix
     pub mesh_index: Option<usize>,
     pub camera_index: Option<usize>,
-    pub children: Vec<usize>, // Indices into nodes array
 }
 
 pub struct Mesh {
@@ -109,7 +107,6 @@ impl Scene {
             nodes: Vec::new(),
             materials: Vec::new(),
             cameras: Vec::new(),
-            root_nodes: Vec::new(),
         };
 
         // Pre-allocate vectors with capacity hints
@@ -143,46 +140,82 @@ impl Scene {
             scene.cameras.push(SceneCamera::from_gltf(&camera)?);
         }
 
-        // Build node hierarchy
-        let mut node_indices = HashMap::with_capacity(node_count);
+        // Flatten the GLTF node hierarchy into a single vector for performance reasons
 
-        // First collect all nodes
+        // Collect all nodes with their local transforms
+        let mut node_indices = HashMap::with_capacity(node_count);
+        let mut node_transforms = HashMap::with_capacity(node_count);
         for node in document.nodes() {
             let node_index = scene.nodes.len();
             node_indices.insert(node.index(), node_index);
-            scene.nodes.push(Node::from_gltf(&node)?);
+            let local_transform = Node::get_local_transform(&node);
+            node_transforms.insert(node.index(), local_transform);
+            scene.nodes.push(Node::from_gltf(&node, local_transform)?);
         }
 
-        // Then set up parent-child relationships
-        for node in document.nodes() {
-            if let Some(node_index) = node_indices.get(&node.index()) {
-                let children: Vec<usize> = node
-                    .children()
-                    .filter_map(|child| node_indices.get(&child.index()).copied())
-                    .collect();
-                scene.nodes[*node_index].children = children;
-            }
-        }
-
-        // Set root nodes (nodes that are not children of any other node)
+        // Find root nodes (nodes that are not children of any other node)
         let child_indices: HashSet<_> = document
             .nodes()
             .flat_map(|node| node.children().map(|child| child.index()))
             .collect();
-
-        scene.root_nodes = document
+        let root_nodes: Vec<_> = document
             .nodes()
             .filter(|node| !child_indices.contains(&node.index()))
-            .filter_map(|node| node_indices.get(&node.index()).copied())
             .collect();
 
+        // Compute final transforms by traversing from root nodes
+        for root_node in root_nodes {
+            Self::compute_final_transform_recursive(
+                &root_node,
+                &node_indices,
+                &node_transforms,
+                Mat4::IDENTITY,
+                &mut scene.nodes,
+            );
+        }
+
         Ok(scene)
+    }
+
+    fn compute_final_transform_recursive(
+        node: &gltf::Node,
+        node_indices: &HashMap<usize, usize>,
+        node_transforms: &HashMap<usize, Mat4>,
+        parent_transform: Mat4,
+        scene_nodes: &mut [Node],
+    ) {
+        let node_index = node_indices[&node.index()];
+        let local_transform = node_transforms[&node.index()];
+        let final_transform = parent_transform * local_transform;
+
+        // Update the node's transform
+        scene_nodes[node_index].transform = final_transform;
+
+        // Recursively process all children
+        for child in node.children() {
+            Self::compute_final_transform_recursive(
+                &child,
+                node_indices,
+                node_transforms,
+                final_transform,
+                scene_nodes,
+            );
+        }
     }
 }
 
 impl Node {
-    fn from_gltf(node: &gltf::Node) -> SceneResult<Self> {
-        let transform: Mat4 = match node.transform() {
+    fn from_gltf(node: &gltf::Node, transform: Mat4) -> SceneResult<Self> {
+        Ok(Node {
+            name: node.name().map(String::from),
+            transform,
+            mesh_index: node.mesh().map(|m| m.index()),
+            camera_index: node.camera().map(|c| c.index()),
+        })
+    }
+
+    fn get_local_transform(node: &gltf::Node) -> Mat4 {
+        match node.transform() {
             gltf::scene::Transform::Matrix { matrix } => {
                 // Convert [[f32; 4]; 4] to Mat4
                 Mat4::from_cols_array_2d(&matrix)
@@ -203,15 +236,7 @@ impl Node {
 
                 translation_matrix * rotation_matrix * scale_matrix
             }
-        };
-
-        Ok(Node {
-            name: node.name().map(String::from),
-            transform,
-            mesh_index: node.mesh().map(|m| m.index()),
-            camera_index: node.camera().map(|c| c.index()),
-            children: Vec::new(), // Will be set up later
-        })
+        }
     }
 }
 
@@ -462,50 +487,22 @@ impl SceneBounds {
     }
 }
 
-fn compute_scene_bounds_mesh(
-    _scene: &Scene,
-    mesh: &Mesh,
-    transform: Mat4,
-    bounds: &mut SceneBounds,
-) {
-    for primitive in &mesh.primitives {
-        for position in &primitive.positions {
-            // Transform vertex position by node's transform
-            let pos = Vec4::new(position[0], position[1], position[2], 1.0);
-            let transformed = transform * pos;
-            bounds.grow(Vec3A::new(transformed.x, transformed.y, transformed.z));
-        }
-    }
-}
-
-fn compute_scene_bounds_node(
-    scene: &Scene,
-    node: &Node,
-    parent_transform: Mat4,
-    bounds: &mut SceneBounds,
-) {
-    // Get node's transform
-    let transform = parent_transform * node.transform;
-
-    // Process node's mesh if it has one
-    if let Some(mesh_index) = node.mesh_index {
-        let mesh = &scene.meshes[mesh_index];
-        compute_scene_bounds_mesh(scene, &mesh, transform, bounds);
-    }
-
-    // Process child nodes
-    for child_index in &node.children {
-        let child = &scene.nodes[*child_index];
-        compute_scene_bounds_node(scene, child, transform, bounds);
-    }
-}
-
 pub fn compute_scene_bounds(scene: &Scene) -> SceneBounds {
     let mut bounds = SceneBounds::new_empty();
 
     // Process all nodes in the scene
     for node in &scene.nodes {
-        compute_scene_bounds_node(scene, node, Mat4::IDENTITY, &mut bounds);
+        if let Some(mesh_index) = node.mesh_index {
+            let mesh = &scene.meshes[mesh_index];
+            for primitive in &mesh.primitives {
+                for position in &primitive.positions {
+                    // Transform vertex position by node's transform
+                    let pos = Vec4::new(position[0], position[1], position[2], 1.0);
+                    let transformed = node.transform * pos;
+                    bounds.grow(Vec3A::new(transformed.x, transformed.y, transformed.z));
+                }
+            }
+        }
     }
 
     bounds
