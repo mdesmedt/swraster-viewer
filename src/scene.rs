@@ -346,7 +346,7 @@ fn get_texture_and_sampler(
                         gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
                         gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
                     },
-                    min_filter: match gltf_sampler.min_filter() {
+                    _min_filter: match gltf_sampler.min_filter() {
                         Some(gltf::texture::MinFilter::Nearest) => Filter::Nearest,
                         Some(gltf::texture::MinFilter::Linear) => Filter::Linear,
                         Some(gltf::texture::MinFilter::NearestMipmapNearest) => Filter::Nearest,
@@ -355,7 +355,7 @@ fn get_texture_and_sampler(
                         Some(gltf::texture::MinFilter::LinearMipmapLinear) => Filter::Linear,
                         None => Filter::Linear,
                     },
-                    mag_filter: match gltf_sampler.mag_filter() {
+                    _mag_filter: match gltf_sampler.mag_filter() {
                         Some(gltf::texture::MagFilter::Nearest) => Filter::Nearest,
                         Some(gltf::texture::MagFilter::Linear) => Filter::Linear,
                         None => Filter::Linear,
@@ -366,8 +366,8 @@ fn get_texture_and_sampler(
                 Sampler {
                     wrap_s: WrapMode::Repeat,
                     wrap_t: WrapMode::Repeat,
-                    min_filter: Filter::Linear,
-                    mag_filter: Filter::Linear,
+                    _min_filter: Filter::Linear,
+                    _mag_filter: Filter::Linear,
                 }
             };
             Some(TextureAndSampler { texture, sampler })

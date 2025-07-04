@@ -3,7 +3,7 @@ use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, IVec4, Mat4, UVec4, Vec3, Vec4};
+use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -394,7 +394,7 @@ impl TileRasterizer {
             }
 
             // HACK: Roughness just reduces specular intensity
-            let roughness_hack = (1.0 - roughness);
+            let roughness_hack = 1.0 - roughness;
             let specular = metallic * roughness_hack * roughness_hack * n_dot_h_32;
             color_r += specular;
             color_g += specular;

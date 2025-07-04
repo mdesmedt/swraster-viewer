@@ -5,7 +5,6 @@ use std::sync::Arc;
 use crate::scene::{SceneError, SceneResult};
 
 pub struct Texture {
-    pub uri: Option<String>,
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>, // RGBA8 data
@@ -25,8 +24,8 @@ pub enum Filter {
 pub struct Sampler {
     pub wrap_s: WrapMode,
     pub wrap_t: WrapMode,
-    pub min_filter: Filter,
-    pub mag_filter: Filter,
+    pub _min_filter: Filter,
+    pub _mag_filter: Filter,
 }
 
 pub struct TextureAndSampler {
@@ -148,7 +147,6 @@ impl TextureCache {
                 let (width, height) = rgba.dimensions();
                 let data = rgba.into_raw();
                 Ok(Texture {
-                    uri: Some(uri.to_string()),
                     width,
                     height,
                     data,
@@ -176,7 +174,6 @@ impl TextureCache {
         }
 
         Texture {
-            uri: None,
             width,
             height,
             data,

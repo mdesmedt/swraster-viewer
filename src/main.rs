@@ -33,7 +33,6 @@ const CAMERA_SPEED_FAST: f32 = 20.0; // Units per second when shift is pressed
 struct RenderState {
     scene: Scene,
     camera: RenderCamera,
-    texture_cache: TextureCache,
 }
 
 // Load the GLTF document and buffers, but skip loading images.
@@ -112,23 +111,27 @@ fn main() {
             .expect("Failed to create scene from GLTF");
 
         // Print scene statistics
-        let total_triangles: usize = scene
-            .meshes
-            .iter()
-            .map(|mesh| {
-                mesh.primitives
-                    .iter()
-                    .map(|primitive| primitive.indices.len() / 3)
-                    .sum::<usize>()
-            })
-            .sum();
-
         let total_primitives: usize = scene
             .nodes
             .iter()
             .map(|node| {
                 node.mesh_index
                     .map(|mesh_index| scene.meshes[mesh_index].primitives.len())
+                    .unwrap_or(0)
+            })
+            .sum();
+        let total_triangles: usize = scene
+            .nodes
+            .iter()
+            .map(|node| {
+                node.mesh_index
+                    .map(|mesh_index| {
+                        scene.meshes[mesh_index]
+                            .primitives
+                            .iter()
+                            .map(|primitive| primitive.indices.len() / 3)
+                            .sum::<usize>()
+                    })
                     .unwrap_or(0)
             })
             .sum();
@@ -173,7 +176,6 @@ fn main() {
         let render_state = RenderState {
             scene,
             camera,
-            texture_cache,
         };
         if let Ok(mut state) = render_state_loading.lock() {
             *state = Some(render_state);

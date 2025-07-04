@@ -2,9 +2,8 @@ use crate::bumpqueue::{BumpPool, BumpQueue};
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
+use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec4};
 use rayon::prelude::*;
-use std::ops::{Add, Mul};
 use std::sync::Arc;
 
 /******************************************************************************
@@ -55,22 +54,6 @@ pub struct Triangle {
     pub v2: Vertex,
     pub mesh_index: usize,
     pub primitive_index: usize,
-}
-
-// Helper struct for the clipper
-#[derive(Copy, Clone)]
-pub struct ClipVertex {
-    pub pos_clip: Vec4,
-    pub bary: Vec3A,
-}
-
-impl ClipVertex {
-    pub fn new_empty() -> Self {
-        Self {
-            pos_clip: Vec4::ZERO,
-            bary: Vec3A::ZERO,
-        }
-    }
 }
 
 // A packet containing a triangle sent from the clipper to the rasterizer for a tile
@@ -151,7 +134,6 @@ pub struct Renderer {
     width: i32,
     height: i32,
     tiles: Vec<TileRasterizer>,
-    packet_pool: Arc<BumpPool<RasterPacket>>,
 }
 
 impl Renderer {
@@ -175,7 +157,6 @@ impl Renderer {
             width,
             height,
             tiles,
-            packet_pool,
         }
     }
 
