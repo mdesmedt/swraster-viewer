@@ -2,6 +2,7 @@ use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 use crate::bumpqueue::BumpQueue;
+use crate::math::*;
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -249,13 +250,7 @@ impl TileRasterizer {
 
         // Compute normal
         let length_squared = normal_x * normal_x + normal_y * normal_y + normal_z * normal_z;
-        let one_over_length = 1.0
-            / Vec4::new(
-                length_squared.x.sqrt(),
-                length_squared.y.sqrt(),
-                length_squared.z.sqrt(),
-                length_squared.w.sqrt(),
-            );
+        let one_over_length = rsqrt_vec(length_squared);
         let normalized_x = normal_x * one_over_length;
         let normalized_y = normal_y * one_over_length;
         let normalized_z = normal_z * one_over_length;
@@ -328,21 +323,11 @@ impl TileRasterizer {
         color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
         color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
-        #[inline]
-        fn linear_to_srgb(color: Vec4) -> Vec4 {
-            // Apply gamma 2.0 instead of 2.2 for perf
-            Vec4::new(
-                color.x.sqrt(),
-                color.y.sqrt(),
-                color.z.sqrt(),
-                color.w.sqrt(),
-            )
-        }
-
         // Gamma correct the final colors before packing
-        color_r = linear_to_srgb(color_r);
-        color_g = linear_to_srgb(color_g);
-        color_b = linear_to_srgb(color_b);
+        // Apply gamma 2.0 instead of 2.2 for perf
+        color_r = sqrt_vec(color_r);
+        color_g = sqrt_vec(color_g);
+        color_b = sqrt_vec(color_b);
 
         // Pack colors into integers
         let packed_colors = UVec4::new(
