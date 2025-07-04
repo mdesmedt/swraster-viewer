@@ -31,9 +31,21 @@ pub struct RenderBuffer {
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
-    pub position: Vec4,
+    pub pos_clip: Vec4,
+    pub pos_world: Vec3,
     pub normal: Vec3,
-    pub texcoords: Vec2,
+    pub uv: Vec2,
+}
+
+impl Vertex {
+    pub fn new_empty() -> Self {
+        Self {
+            pos_clip: Vec4::ZERO,
+            pos_world: Vec3::ZERO,
+            normal: Vec3::ZERO,
+            uv: Vec2::ZERO,
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -48,15 +60,15 @@ pub struct Triangle {
 // Helper struct for the clipper
 #[derive(Copy, Clone)]
 pub struct ClipVertex {
-    pub position: Vec4,
-    pub barycentric: Vec3A,
+    pub pos_clip: Vec4,
+    pub bary: Vec3A,
 }
 
 impl ClipVertex {
     pub fn new_empty() -> Self {
         Self {
-            position: Vec4::ZERO,
-            barycentric: Vec3A::ZERO,
+            pos_clip: Vec4::ZERO,
+            bary: Vec3A::ZERO,
         }
     }
 }
@@ -71,8 +83,9 @@ pub struct RasterPacket {
     pub one_over_area: f32,
     pub one_over_w: [f32; 3],
     pub primitive_index: u32,
-    pub normal_over_w: [Vec3; 3],
+    pub normals: [Vec3; 3],
     pub uv_over_w: [Vec2; 3],
+    pub pos_world_over_w: [Vec3; 3],
     pub mesh_index: u32,
 }
 
@@ -299,6 +312,9 @@ impl Renderer {
         let texcoords = &primitive.texcoords;
         let indices = &primitive.indices;
 
+        // Compute normal to world rotation matrix (assume uniform scaling)
+        let rotation_matrix = Mat3A::from_mat4(model_matrix);
+
         // Process triangles in batches of 128 triangles
         const TRIANGLES_PER_BATCH: usize = 128;
         const INDICES_PER_BATCH: usize = TRIANGLES_PER_BATCH * 3;
@@ -314,41 +330,48 @@ impl Renderer {
                 let i2 = chunk[2] as usize;
 
                 // Read vertices
-                let world0 = positions[i0];
-                let world1 = positions[i1];
-                let world2 = positions[i2];
+                let local0 = positions[i0];
+                let local1 = positions[i1];
+                let local2 = positions[i2];
+
+                // Compute world space positions
+                let world0 = model_matrix * local0.extend(1.0);
+                let world1 = model_matrix * local1.extend(1.0);
+                let world2 = model_matrix * local2.extend(1.0);
 
                 // Project vertices to clip space
-                let clip0 = mvp_matrix * world0.extend(1.0);
-                let clip1 = mvp_matrix * world1.extend(1.0);
-                let clip2 = mvp_matrix * world2.extend(1.0);
+                let clip0 = mvp_matrix * local0.extend(1.0);
+                let clip1 = mvp_matrix * local1.extend(1.0);
+                let clip2 = mvp_matrix * local2.extend(1.0);
 
                 // Read normals
                 let normal0 = normals[i0];
                 let normal1 = normals[i1];
                 let normal2 = normals[i2];
 
-                // Rotate normals to world space
-                let rotation_matrix = Mat3A::from_mat4(model_matrix);
+                // Rotate normals to world space (assume uniform scaling)
                 let normal_world0 = rotation_matrix * normal0;
                 let normal_world1 = rotation_matrix * normal1;
                 let normal_world2 = rotation_matrix * normal2;
 
                 let triangle = Triangle {
                     v0: Vertex {
-                        position: clip0,
+                        pos_clip: clip0,
+                        pos_world: world0.truncate(),
                         normal: normal_world0,
-                        texcoords: texcoords[i0],
+                        uv: texcoords[i0],
                     },
                     v1: Vertex {
-                        position: clip1,
+                        pos_clip: clip1,
+                        pos_world: world1.truncate(),
                         normal: normal_world1,
-                        texcoords: texcoords[i1],
+                        uv: texcoords[i1],
                     },
                     v2: Vertex {
-                        position: clip2,
+                        pos_clip: clip2,
+                        pos_world: world2.truncate(),
                         normal: normal_world2,
-                        texcoords: texcoords[i2],
+                        uv: texcoords[i2],
                     },
                     mesh_index,
                     primitive_index,
@@ -382,34 +405,27 @@ impl Renderer {
 
         // Intersect edge with plane
         #[inline]
-        fn intersect(v0: ClipVertex, v1: ClipVertex, plane: Vec4) -> ClipVertex {
-            let d0 = plane.dot(v0.position);
-            let d1 = plane.dot(v1.position);
+        fn intersect(v0: Vertex, v1: Vertex, plane: Vec4) -> Vertex {
+            let d0 = plane.dot(v0.pos_clip);
+            let d1 = plane.dot(v1.pos_clip);
             let t = d0 / (d0 - d1);
-            ClipVertex {
-                position: v0.position + (v1.position - v0.position) * t,
-                barycentric: v0.barycentric + (v1.barycentric - v0.barycentric) * t,
+            Vertex {
+                pos_clip: v0.pos_clip + (v1.pos_clip - v0.pos_clip) * t,
+                pos_world: v0.pos_world + (v1.pos_world - v0.pos_world) * t,
+                normal: v0.normal + (v1.normal - v0.normal) * t,
+                uv: v0.uv + (v1.uv - v0.uv) * t,
             }
         }
 
         // Use a fixed-size buffer (assumed bound: 16 vertices) for the polygon.
-        let mut poly: [ClipVertex; 16] = [ClipVertex::new_empty(); 16];
+        let mut poly: [Vertex; 16] = [Vertex::new_empty(); 16];
         let mut poly_len: usize = 3; // Start with the original triangle (3 vertices)
-        poly[0] = ClipVertex {
-            position: triangle.v0.position,
-            barycentric: Vec3A::new(1.0, 0.0, 0.0),
-        };
-        poly[1] = ClipVertex {
-            position: triangle.v1.position,
-            barycentric: Vec3A::new(0.0, 1.0, 0.0),
-        };
-        poly[2] = ClipVertex {
-            position: triangle.v2.position,
-            barycentric: Vec3A::new(0.0, 0.0, 1.0),
-        };
+        poly[0] = triangle.v0;
+        poly[1] = triangle.v1;
+        poly[2] = triangle.v2;
 
         // Use a second fixed buffer (new_poly) for the "new" polygon.
-        let mut new_poly: [ClipVertex; 16] = [ClipVertex::new_empty(); 16];
+        let mut new_poly: [Vertex; 16] = [Vertex::new_empty(); 16];
 
         for &plane in &PLANES {
             if poly_len == 0 {
@@ -419,8 +435,8 @@ impl Renderer {
             for i in 0..poly_len {
                 let curr = poly[i];
                 let prev = poly[(i + poly_len - 1) % poly_len];
-                let curr_in = is_inside(curr.position, plane);
-                let prev_in = is_inside(prev.position, plane);
+                let curr_in = is_inside(curr.pos_clip, plane);
+                let prev_in = is_inside(prev.pos_clip, plane);
                 if curr_in {
                     if !prev_in {
                         new_poly[new_len] = intersect(prev, curr, plane);
@@ -445,62 +461,11 @@ impl Renderer {
             return;
         }
 
-        #[inline]
-        fn interp<T>(a: T, b: T, c: T, barycentric: Vec3A) -> T
-        where
-            T: Copy + Add<Output = T> + Mul<f32, Output = T>,
-        {
-            a * barycentric.x + b * barycentric.y + c * barycentric.z
-        }
-
         for i in 1..poly_len - 1 {
-            // Interpolate the vertex attributes
             let triangle = Triangle {
-                v0: Vertex {
-                    position: poly[0].position,
-                    normal: interp(
-                        triangle.v0.normal,
-                        triangle.v1.normal,
-                        triangle.v2.normal,
-                        poly[0].barycentric,
-                    ),
-                    texcoords: interp(
-                        triangle.v0.texcoords,
-                        triangle.v1.texcoords,
-                        triangle.v2.texcoords,
-                        poly[0].barycentric,
-                    ),
-                },
-                v1: Vertex {
-                    position: poly[i].position,
-                    normal: interp(
-                        triangle.v0.normal,
-                        triangle.v1.normal,
-                        triangle.v2.normal,
-                        poly[i].barycentric,
-                    ),
-                    texcoords: interp(
-                        triangle.v0.texcoords,
-                        triangle.v1.texcoords,
-                        triangle.v2.texcoords,
-                        poly[i].barycentric,
-                    ),
-                },
-                v2: Vertex {
-                    position: poly[i + 1].position,
-                    normal: interp(
-                        triangle.v0.normal,
-                        triangle.v1.normal,
-                        triangle.v2.normal,
-                        poly[i + 1].barycentric,
-                    ),
-                    texcoords: interp(
-                        triangle.v0.texcoords,
-                        triangle.v1.texcoords,
-                        triangle.v2.texcoords,
-                        poly[i + 1].barycentric,
-                    ),
-                },
+                v0: poly[0],
+                v1: poly[i],
+                v2: poly[i + 1],
                 mesh_index: triangle.mesh_index,
                 primitive_index: triangle.primitive_index,
             };
@@ -513,9 +478,9 @@ impl Renderer {
     // Projects a triangle to screen space and bins it into tiles
     fn bin_triangle(&self, triangle: Triangle) {
         // Compute the screen space bounding box of the triangle
-        let p0 = self.clip_to_screen(triangle.v0.position);
-        let p1 = self.clip_to_screen(triangle.v1.position);
-        let p2 = self.clip_to_screen(triangle.v2.position);
+        let p0 = self.clip_to_screen(triangle.v0.pos_clip);
+        let p1 = self.clip_to_screen(triangle.v1.pos_clip);
+        let p2 = self.clip_to_screen(triangle.v2.pos_clip);
 
         // NOTE: At this point triangles are CW front-facing because of screen coordinate conversion
 
@@ -529,28 +494,30 @@ impl Renderer {
 
         // Set up the values which the rasterizer will need
 
-        let w0 = triangle.v0.position.w;
-        let w1 = triangle.v1.position.w;
-        let w2 = triangle.v2.position.w;
-
-        let one_over_w = [1.0 / w0, 1.0 / w1, 1.0 / w2];
+        let one_over_w = [
+            1.0 / triangle.v0.pos_clip.w,
+            1.0 / triangle.v1.pos_clip.w,
+            1.0 / triangle.v2.pos_clip.w,
+        ];
 
         let z_over_w = [
-            triangle.v0.position.z / w0,
-            triangle.v1.position.z / w1,
-            triangle.v2.position.z / w2,
+            triangle.v0.pos_clip.z * one_over_w[0],
+            triangle.v1.pos_clip.z * one_over_w[1],
+            triangle.v2.pos_clip.z * one_over_w[2],
         ];
 
-        let normal_over_w = [
-            triangle.v0.normal / w0,
-            triangle.v1.normal / w1,
-            triangle.v2.normal / w2,
-        ];
+        let normals = [triangle.v0.normal, triangle.v1.normal, triangle.v2.normal];
 
         let uv_over_w = [
-            triangle.v0.texcoords / w0,
-            triangle.v1.texcoords / w1,
-            triangle.v2.texcoords / w2,
+            triangle.v0.uv * one_over_w[0],
+            triangle.v1.uv * one_over_w[1],
+            triangle.v2.uv * one_over_w[2],
+        ];
+
+        let pos_world_over_w = [
+            triangle.v0.pos_world * one_over_w[0],
+            triangle.v1.pos_world * one_over_w[1],
+            triangle.v2.pos_world * one_over_w[2],
         ];
 
         // Compute triangle bounding box
@@ -600,8 +567,9 @@ impl Renderer {
                             pos_screen: [p0, p1, p2],
                             z_over_w: z_over_w,
                             one_over_w: one_over_w,
-                            normal_over_w: normal_over_w,
+                            normals: normals,
                             uv_over_w: uv_over_w,
+                            pos_world_over_w: pos_world_over_w,
                             primitive_index: triangle.primitive_index as u32,
                             mesh_index: triangle.mesh_index as u32,
                             one_over_area: 1.0 / signed_area,

@@ -3,7 +3,7 @@ use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
+use glam::{BVec4, BVec4A, IVec2, IVec4, Mat4, UVec4, Vec3, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -52,11 +52,6 @@ impl TileRasterizer {
         let material_index = mesh.primitives[primitive_index].material_index;
         let material: Option<&Material> = scene.materials.get(material_index.unwrap());
 
-        // Get the world-space view normal for specular lighting
-        let view_normal_x = Vec4::splat(camera.view_normal.x);
-        let view_normal_y = Vec4::splat(camera.view_normal.y);
-        let view_normal_z = Vec4::splat(camera.view_normal.z);
-
         // Determine whether we can do early z testing
         let is_alpha_tested = if let Some(material) = material {
             material.is_alpha_tested
@@ -69,7 +64,8 @@ impl TileRasterizer {
         let p1 = packet.pos_screen[1];
         let p2 = packet.pos_screen[2];
 
-        let one_over_area_vec = Vec4::splat(packet.one_over_area);
+        // Invert one over area to take the winding switch into account
+        let one_over_area_vec = Vec4::splat(-packet.one_over_area);
 
         // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
@@ -142,9 +138,7 @@ impl TileRasterizer {
                         is_alpha_tested,
                         &packet,
                         material,
-                        view_normal_x,
-                        view_normal_y,
-                        view_normal_z,
+                        camera,
                     );
                 }
 
@@ -179,9 +173,7 @@ impl TileRasterizer {
         is_alpha_tested: bool,
         packet: &RasterPacket,
         material: Option<&Material>,
-        view_normal_x: Vec4,
-        view_normal_y: Vec4,
-        view_normal_z: Vec4,
+        camera: &RenderCamera,
     ) {
         // Compute the barycentrics
         let bary0: Vec4 = w0 * one_over_area_vec;
@@ -234,29 +226,29 @@ impl TileRasterizer {
         }
 
         let input_normal_x = interpolate_vertex_attribute(
-            packet.normal_over_w[0].x,
-            packet.normal_over_w[1].x,
-            packet.normal_over_w[2].x,
+            packet.normals[0].x,
+            packet.normals[1].x,
+            packet.normals[2].x,
             bary0,
             bary1,
             bary2,
-        ) * w;
+        );
         let input_normal_y = interpolate_vertex_attribute(
-            packet.normal_over_w[0].y,
-            packet.normal_over_w[1].y,
-            packet.normal_over_w[2].y,
+            packet.normals[0].y,
+            packet.normals[1].y,
+            packet.normals[2].y,
             bary0,
             bary1,
             bary2,
-        ) * w;
+        );
         let input_normal_z = interpolate_vertex_attribute(
-            packet.normal_over_w[0].z,
-            packet.normal_over_w[1].z,
-            packet.normal_over_w[2].z,
+            packet.normals[0].z,
+            packet.normals[1].z,
+            packet.normals[2].z,
             bary0,
             bary1,
             bary2,
-        ) * w;
+        );
 
         // "Pixel shader" which computes color values for the 4 pixels
 
@@ -274,6 +266,42 @@ impl TileRasterizer {
         let n_dot_l_y = normal_y * light_y;
         let n_dot_l_z = normal_z * light_z;
         let diffuse = (n_dot_l_x + n_dot_l_y + n_dot_l_z).clamp(Vec4::ZERO, Vec4::ONE);
+
+        let pos_world_x = interpolate_vertex_attribute(
+            packet.pos_world_over_w[0].x,
+            packet.pos_world_over_w[1].x,
+            packet.pos_world_over_w[2].x,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+        let pos_world_y = interpolate_vertex_attribute(
+            packet.pos_world_over_w[0].y,
+            packet.pos_world_over_w[1].y,
+            packet.pos_world_over_w[2].y,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+        let pos_world_z = interpolate_vertex_attribute(
+            packet.pos_world_over_w[0].z,
+            packet.pos_world_over_w[1].z,
+            packet.pos_world_over_w[2].z,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+
+        // Compute the view direction for each pixel
+        let view_dir_x = camera.position.x - pos_world_x;
+        let view_dir_y = camera.position.y - pos_world_y;
+        let view_dir_z = camera.position.z - pos_world_z;
+        let view_dir_length_squared =
+            view_dir_x * view_dir_x + view_dir_y * view_dir_y + view_dir_z * view_dir_z;
+        let one_over_view_dir_length = rsqrt_vec(view_dir_length_squared);
+        let view_normal_x = view_dir_x * one_over_view_dir_length;
+        let view_normal_y = view_dir_y * one_over_view_dir_length;
+        let view_normal_z = view_dir_z * one_over_view_dir_length;
 
         // Compute half vector
         let half_vector_add_x = light_x + view_normal_x;
@@ -298,13 +326,12 @@ impl TileRasterizer {
         let n_dot_h_8 = n_dot_h_4 * n_dot_h_4;
         let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
-        let specular = n_dot_h_32;
 
         // TODO: Add better ambient light somehow
         let ambient = Vec4::splat(0.1);
 
-        // Start the color with irradiance, currently monochrome
-        let light_intensity = diffuse + ambient + specular;
+        let light_intensity = diffuse + ambient;
+
         let mut color_r = light_intensity;
         let mut color_g = light_intensity;
         let mut color_b = light_intensity;
@@ -314,32 +341,28 @@ impl TileRasterizer {
             color_r *= material.base_color_factor.x;
             color_g *= material.base_color_factor.y;
             color_b *= material.base_color_factor.z;
+
+            // Interpolate UVs
+            let uv_x = interpolate_vertex_attribute(
+                packet.uv_over_w[0].x,
+                packet.uv_over_w[1].x,
+                packet.uv_over_w[2].x,
+                bary0,
+                bary1,
+                bary2,
+            ) * w;
+            let uv_y = interpolate_vertex_attribute(
+                packet.uv_over_w[0].y,
+                packet.uv_over_w[1].y,
+                packet.uv_over_w[2].y,
+                bary0,
+                bary1,
+                bary2,
+            ) * w;
+
             // If we have a base texture, sample it
             if let Some(diffuse_texture) = &material.base_color_texture {
-                // Interpolate UVs
-                let uv_x = interpolate_vertex_attribute(
-                    packet.uv_over_w[0].x,
-                    packet.uv_over_w[1].x,
-                    packet.uv_over_w[2].x,
-                    bary0,
-                    bary1,
-                    bary2,
-                ) * w;
-                let uv_y = interpolate_vertex_attribute(
-                    packet.uv_over_w[0].y,
-                    packet.uv_over_w[1].y,
-                    packet.uv_over_w[2].y,
-                    bary0,
-                    bary1,
-                    bary2,
-                ) * w;
-
-                // Sample base texture for each pixel
                 let diffuse_vec = diffuse_texture.sample_vec4(uv_x, uv_y);
-                // Simple gamma 2.0 instead of 2.2 for perf
-                color_r *= diffuse_vec[0] * diffuse_vec[0];
-                color_g *= diffuse_vec[1] * diffuse_vec[1];
-                color_b *= diffuse_vec[2] * diffuse_vec[2];
 
                 // Alpha test
                 if is_alpha_tested {
@@ -352,11 +375,49 @@ impl TileRasterizer {
                         return;
                     }
                 }
+
+                // Multiply diffuse color
+                // Simple gamma 2.0 instead of 2.2 for perf
+                color_r *= diffuse_vec[0] * diffuse_vec[0];
+                color_g *= diffuse_vec[1] * diffuse_vec[1];
+                color_b *= diffuse_vec[2] * diffuse_vec[2];
             }
+
+            let mut metallic = Vec4::splat(material.metallic_factor);
+            let mut roughness = Vec4::splat(material.roughness_factor);
+
+            // If we have a metallic/roughness texture, sample it
+            if let Some(spec_texture) = &material.metallic_roughness_texture {
+                let metallic_roughness_vec = spec_texture.sample_vec4(uv_x, uv_y);
+                metallic *= metallic_roughness_vec[0];
+                roughness *= metallic_roughness_vec[1];
+            }
+
+            // HACK: Roughness just reduces specular intensity
+            let roughness_hack = (1.0 - roughness);
+            let specular = metallic * roughness_hack * roughness_hack * n_dot_h_32;
+            color_r += specular;
+            color_g += specular;
+            color_b += specular;
         } else {
             // Missing material
             // TODO: Guarantee a default material instead?
+
+            // Add default most shiny specular
+            color_r += n_dot_h_32;
+            color_g += n_dot_h_32;
+            color_b += n_dot_h_32;
         }
+
+        // Debug: Show world space position
+        // color_r = pos_world_x;
+        // color_g = pos_world_y;
+        // color_b = pos_world_z;
+
+        // Debug: Show normal
+        // color_r = normal_x;
+        // color_g = normal_y;
+        // color_b = normal_z;
 
         // Clamp final colors before packing
         color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);
