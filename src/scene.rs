@@ -35,6 +35,7 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     pub materials: Vec<Material>,
     pub cameras: Vec<SceneCamera>,
+    pub bounds: SceneBounds,
 }
 
 pub struct Node {
@@ -107,6 +108,7 @@ impl Scene {
             nodes: Vec::new(),
             materials: Vec::new(),
             cameras: Vec::new(),
+            bounds: SceneBounds::new_empty(),
         };
 
         // Pre-allocate vectors with capacity hints
@@ -173,6 +175,26 @@ impl Scene {
                 &mut scene.nodes,
             );
         }
+
+        // Compute scene bounds
+        // Process all nodes in the scene
+        for node in &scene.nodes {
+            if let Some(mesh_index) = node.mesh_index {
+                let mesh = &scene.meshes[mesh_index];
+                for primitive in &mesh.primitives {
+                    for position in &primitive.positions {
+                        // Transform vertex position by node's transform
+                        let pos = Vec4::new(position[0], position[1], position[2], 1.0);
+                        let transformed = node.transform * pos;
+                        scene
+                            .bounds
+                            .grow(Vec3A::new(transformed.x, transformed.y, transformed.z));
+                    }
+                }
+            }
+        }
+        scene.bounds.center = (scene.bounds.min + scene.bounds.max) * 0.5;
+        scene.bounds.diagonal = (scene.bounds.max - scene.bounds.min).length();
 
         Ok(scene)
     }
@@ -500,6 +522,8 @@ pub struct Light {
 pub struct SceneBounds {
     pub min: Vec3A,
     pub max: Vec3A,
+    pub center: Vec3A,
+    pub diagonal: f32,
 }
 
 impl SceneBounds {
@@ -507,6 +531,8 @@ impl SceneBounds {
         Self {
             min: Vec3A::INFINITY,
             max: Vec3A::NEG_INFINITY,
+            center: Vec3A::ZERO,
+            diagonal: 0.0,
         }
     }
 
@@ -522,25 +548,4 @@ impl SceneBounds {
             self.max.z.max(point.z),
         );
     }
-}
-
-pub fn compute_scene_bounds(scene: &Scene) -> SceneBounds {
-    let mut bounds = SceneBounds::new_empty();
-
-    // Process all nodes in the scene
-    for node in &scene.nodes {
-        if let Some(mesh_index) = node.mesh_index {
-            let mesh = &scene.meshes[mesh_index];
-            for primitive in &mesh.primitives {
-                for position in &primitive.positions {
-                    // Transform vertex position by node's transform
-                    let pos = Vec4::new(position[0], position[1], position[2], 1.0);
-                    let transformed = node.transform * pos;
-                    bounds.grow(Vec3A::new(transformed.x, transformed.y, transformed.z));
-                }
-            }
-        }
-    }
-
-    bounds
 }

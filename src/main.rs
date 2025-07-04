@@ -22,13 +22,13 @@ mod scene;
 
 use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
-use scene::{compute_scene_bounds, Scene};
+use scene::Scene;
 use texture::TextureCache;
 
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
-const CAMERA_SPEED: f32 = 2.0; // Units per second
-const CAMERA_SPEED_FAST: f32 = 20.0; // Units per second when shift is pressed
+const CAMERA_SPEED: f32 = 0.15; // Speed relative to scene size per second
+const CAMERA_SPEED_FAST: f32 = 0.6; // Speed when shift is pressed
 
 struct RenderState {
     scene: Scene,
@@ -142,11 +142,6 @@ fn load_scene(gltf_path: &Path, render_state_loading: &Arc<Mutex<LoadingState>>)
     println!("  Unique Textures: {}", unique_textures);
     println!("  Total Texture Data: {:.2} MiB", total_texture_data_mib);
 
-    // Compute scene bounds and set up camera to look at center
-    let bounds = compute_scene_bounds(&scene);
-    let scene_center = (bounds.min + bounds.max) * 0.5;
-    let scene_size = (bounds.max - bounds.min).length();
-
     // Create a default camera if none exists in the file
     let camera = if let Some(camera) = document.cameras().next() {
         match RenderCamera::from_gltf(&camera, WIDTH as f32, HEIGHT as f32) {
@@ -162,12 +157,12 @@ fn load_scene(gltf_path: &Path, render_state_loading: &Arc<Mutex<LoadingState>>)
         }
     } else {
         // Position camera at a distance proportional to scene size
-        let camera_distance = scene_size;
-        let camera_pos = scene_center + Vec3A::new(0.0, 0.0, camera_distance);
+        let camera_distance = scene.bounds.diagonal;
+        let camera_pos = scene.bounds.center + Vec3A::new(0.0, 0.0, camera_distance);
 
         RenderCamera::new(
             Vec3::from(camera_pos),
-            Vec3::from(scene_center),
+            Vec3::from(scene.bounds.center),
             std::f32::consts::PI / 4.0,
             WIDTH as f32,
             HEIGHT as f32,
@@ -273,6 +268,8 @@ fn main() {
                     move_dir.y -= 1.0; // Down (negative Y in camera space)
                 }
 
+                let scene_size = render_state.scene.bounds.diagonal;
+
                 // Normalize movement direction if moving diagonally
                 if move_dir.length_squared() > 0.0 {
                     move_dir = move_dir.normalize();
@@ -280,9 +277,9 @@ fn main() {
                     let speed = if window.is_key_down(Key::LeftShift)
                         || window.is_key_down(Key::RightShift)
                     {
-                        CAMERA_SPEED_FAST
+                        CAMERA_SPEED_FAST * scene_size
                     } else {
-                        CAMERA_SPEED
+                        CAMERA_SPEED * scene_size
                     };
                     camera.move_relative(move_dir, speed * delta_time);
                 }
