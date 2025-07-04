@@ -1,8 +1,9 @@
-use crate::renderer::RasterPacket;
-use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 use crate::bumpqueue::BumpQueue;
 use crate::math::*;
+use crate::rendercamera::RenderCamera;
+use crate::renderer::RasterPacket;
+use crate::scene::{Material, Scene};
+use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -20,19 +21,19 @@ impl TileRasterizer {
         self.depth.fill(Vec4::splat(f32::INFINITY));
     }
 
-    pub fn rasterize_packets(&mut self, scene: &Scene) {
+    pub fn rasterize_packets(&mut self, scene: &Scene, camera: &RenderCamera) {
         // Clear the tile first
         self.clear();
         // Then consume all packets in the queue
         while let Some(packet) = self.packets.pop() {
-            self.rasterize_packet(scene, packet);
+            self.rasterize_packet(scene, camera, packet);
         }
         // Reset the queue
         self.packets.reset();
     }
 
     // Main rasterizer code
-    fn rasterize_packet(&mut self, scene: &Scene, packet: RasterPacket) {
+    fn rasterize_packet(&mut self, scene: &Scene, camera: &RenderCamera, packet: RasterPacket) {
         let x_start = packet.screen_min.x & !3; // Align left to 4-pixels for SIMD alignment
         let y_start = packet.screen_min.y;
         let mut p = IVec2::new(x_start, y_start);
@@ -50,6 +51,11 @@ impl TileRasterizer {
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
         let material: Option<&Material> = scene.materials.get(material_index.unwrap());
+
+        // Get the world-space view normal for specular lighting
+        let view_normal_x = Vec4::splat(camera.view_normal.x);
+        let view_normal_y = Vec4::splat(camera.view_normal.y);
+        let view_normal_z = Vec4::splat(camera.view_normal.z);
 
         // Determine whether we can do early z testing
         let is_alpha_tested = if let Some(material) = material {
@@ -136,6 +142,9 @@ impl TileRasterizer {
                         is_alpha_tested,
                         &packet,
                         material,
+                        view_normal_x,
+                        view_normal_y,
+                        view_normal_z,
                     );
                 }
 
@@ -170,6 +179,9 @@ impl TileRasterizer {
         is_alpha_tested: bool,
         packet: &RasterPacket,
         material: Option<&Material>,
+        view_normal_x: Vec4,
+        view_normal_y: Vec4,
+        view_normal_z: Vec4,
     ) {
         // Compute the barycentrics
         let bary0: Vec4 = w0 * one_over_area_vec;
@@ -221,7 +233,7 @@ impl TileRasterizer {
             }
         }
 
-        let normal_x = interpolate_vertex_attribute(
+        let input_normal_x = interpolate_vertex_attribute(
             packet.normal_over_w[0].x,
             packet.normal_over_w[1].x,
             packet.normal_over_w[2].x,
@@ -229,7 +241,7 @@ impl TileRasterizer {
             bary1,
             bary2,
         ) * w;
-        let normal_y = interpolate_vertex_attribute(
+        let input_normal_y = interpolate_vertex_attribute(
             packet.normal_over_w[0].y,
             packet.normal_over_w[1].y,
             packet.normal_over_w[2].y,
@@ -237,7 +249,7 @@ impl TileRasterizer {
             bary1,
             bary2,
         ) * w;
-        let normal_z = interpolate_vertex_attribute(
+        let input_normal_z = interpolate_vertex_attribute(
             packet.normal_over_w[0].z,
             packet.normal_over_w[1].z,
             packet.normal_over_w[2].z,
@@ -249,22 +261,50 @@ impl TileRasterizer {
         // "Pixel shader" which computes color values for the 4 pixels
 
         // Compute normal
-        let length_squared = normal_x * normal_x + normal_y * normal_y + normal_z * normal_z;
+        let length_squared = input_normal_x * input_normal_x
+            + input_normal_y * input_normal_y
+            + input_normal_z * input_normal_z;
         let one_over_length = rsqrt_vec(length_squared);
-        let normalized_x = normal_x * one_over_length;
-        let normalized_y = normal_y * one_over_length;
-        let normalized_z = normal_z * one_over_length;
+        let normal_x = input_normal_x * one_over_length;
+        let normal_y = input_normal_y * one_over_length;
+        let normal_z = input_normal_z * one_over_length;
 
         // Apply N.L lighting
-        let dot_x = normalized_x * light_x;
-        let dot_y = normalized_y * light_y;
-        let dot_z = normalized_z * light_z;
-        let mut light_intensity = (dot_x + dot_y + dot_z).clamp(Vec4::ZERO, Vec4::ONE);
+        let n_dot_l_x = normal_x * light_x;
+        let n_dot_l_y = normal_y * light_y;
+        let n_dot_l_z = normal_z * light_z;
+        let diffuse = (n_dot_l_x + n_dot_l_y + n_dot_l_z).clamp(Vec4::ZERO, Vec4::ONE);
+
+        // Compute half vector
+        let half_vector_add_x = light_x + view_normal_x;
+        let half_vector_add_y = light_y + view_normal_y;
+        let half_vector_add_z = light_z + view_normal_z;
+        // Normalize half vector
+        let half_vector_length_squared = half_vector_add_x * half_vector_add_x
+            + half_vector_add_y * half_vector_add_y
+            + half_vector_add_z * half_vector_add_z;
+        let one_over_half_vector_length = rsqrt_vec(half_vector_length_squared);
+        let half_vector_x = half_vector_add_x * one_over_half_vector_length;
+        let half_vector_y = half_vector_add_y * one_over_half_vector_length;
+        let half_vector_z = half_vector_add_z * one_over_half_vector_length;
+        // H.N
+        let n_dot_h_x = normal_x * half_vector_x;
+        let n_dot_h_y = normal_y * half_vector_y;
+        let n_dot_h_z = normal_z * half_vector_z;
+        let n_dot_h = (n_dot_h_x + n_dot_h_y + n_dot_h_z).clamp(Vec4::ZERO, Vec4::ONE);
+        // Exponentiate
+        let n_dot_h_2 = n_dot_h * n_dot_h;
+        let n_dot_h_4 = n_dot_h_2 * n_dot_h_2;
+        let n_dot_h_8 = n_dot_h_4 * n_dot_h_4;
+        let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
+        let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
+        let specular = n_dot_h_32;
 
         // TODO: Add better ambient light somehow
-        light_intensity += Vec4::splat(0.2);
+        let ambient = Vec4::splat(0.1);
 
         // Start the color with irradiance, currently monochrome
+        let light_intensity = diffuse + ambient + specular;
         let mut color_r = light_intensity;
         let mut color_g = light_intensity;
         let mut color_b = light_intensity;

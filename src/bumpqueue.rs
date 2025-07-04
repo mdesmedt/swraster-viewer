@@ -1,8 +1,8 @@
+use crossbeam::queue::SegQueue;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use crossbeam::queue::SegQueue;
 
 const BLOCK_SIZE: usize = 128;
 const BLOCK_ALLOC_TRIGGER: usize = BLOCK_SIZE - 1;
@@ -14,23 +14,23 @@ struct BumpBlock<T> {
 
 impl<T> BumpBlock<T> {
     pub fn new() -> Self {
-        Self { 
-            data: Box::new(std::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit()))),
+        Self {
+            data: Box::new(std::array::from_fn(|_| {
+                UnsafeCell::new(MaybeUninit::uninit())
+            })),
         }
     }
 
     pub fn write(&self, index: usize, value: T) {
         let cell = &self.data[index];
-        unsafe { 
+        unsafe {
             (*cell.get()).write(value);
         }
     }
 
     pub fn read(&self, index: usize) -> T {
         let cell = &self.data[index];
-        unsafe { 
-            (*cell.get()).assume_init_read()
-        }
+        unsafe { (*cell.get()).assume_init_read() }
     }
 }
 
@@ -54,8 +54,7 @@ impl<T> BumpPool<T> {
     fn alloc_block(&self) -> usize {
         if let Some(index) = self.freelist.pop() {
             index
-        }
-        else {
+        } else {
             self.blocks.push(BumpBlock::new())
         }
     }
@@ -107,7 +106,7 @@ impl<T> BumpQueue<T> {
             // Allocate a new block expecting the next push
             self.blocks.push(self.pool.alloc_block());
         }
-        
+
         // Spin until we have enough blocks
         while self.blocks.count() <= block_idx {
             // Waiting for the previous push to add a block

@@ -17,6 +17,7 @@ pub struct RenderCamera {
     pub projection_matrix: Mat4,
     pub view_project_matrix: Mat4,
     pub view_clip_planes: [Vec4; 6],
+    pub view_normal: Vec3,
 }
 
 impl RenderCamera {
@@ -42,6 +43,7 @@ impl RenderCamera {
             projection_matrix: Mat4::IDENTITY,
             view_project_matrix: Mat4::IDENTITY,
             view_clip_planes: [Vec4::ZERO; 6],
+            view_normal: Vec3::ZERO,
         }
     }
 
@@ -63,6 +65,7 @@ impl RenderCamera {
         self.projection_matrix = self.compute_projection_matrix();
         self.view_project_matrix = self.projection_matrix * self.view_matrix;
         self.view_clip_planes = self.compute_view_clip_planes();
+        self.view_normal = self.get_rotation().conjugate() * Vec3::new(0.0, 0.0, 1.0);
     }
 
     fn compute_view_matrix(&self) -> Mat4 {

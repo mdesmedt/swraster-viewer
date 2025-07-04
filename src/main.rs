@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+mod bumpqueue;
+mod math;
 mod rendercamera;
 mod renderer;
 mod texture;
 mod tilerasterizer;
-mod bumpqueue;
-mod math;
 
 // TODO: Remove dead code in the GLTF scene boilerplate module. This is just to stop rustc from complaining.
 #[allow(dead_code)]

@@ -27,7 +27,6 @@ pub fn sqrt_vec(v: Vec4) -> Vec4 {
     Vec4::from(l_m128)
 }
 
-
 #[cfg(target_arch = "x86_64")]
 pub fn rsqrt_vec(v: Vec4) -> Vec4 {
     let l_m128: __m128 = v.into();

@@ -1,7 +1,7 @@
+use crate::bumpqueue::{BumpPool, BumpQueue};
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
-use crate::bumpqueue::{BumpPool, BumpQueue};
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::ops::{Add, Mul};
@@ -102,7 +102,11 @@ impl RenderBuffer {
 
 // Creates both the binner and the rasterizer tiles for specified screen bounds
 // The binner contains the sender and the rasterizer contains the receiver for the channel
-fn create_screen_tile(screen_min: IVec2, screen_max: IVec2, pool: Arc<BumpPool<RasterPacket>>) -> TileRasterizer {
+fn create_screen_tile(
+    screen_min: IVec2,
+    screen_max: IVec2,
+    pool: Arc<BumpPool<RasterPacket>>,
+) -> TileRasterizer {
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
     let width_vec4 = (width + 3) / 4;
@@ -171,18 +175,13 @@ impl Renderer {
     ) {
         // Clip and bin primitives in each node in the scene in parallel
         scene.nodes.par_iter().for_each(|node| {
-            self.render_node(
-                scene,
-                camera,
-                node,
-                camera.view_project_matrix,
-            );
+            self.render_node(scene, camera, node, camera.view_project_matrix);
         });
 
         // Rasterize each bin
         // One thread per bin avoids having to lock the tile constantly
         self.tiles.par_iter_mut().for_each(|tile| {
-            tile.rasterize_packets(scene);
+            tile.rasterize_packets(scene, camera);
         });
 
         // Copy all tiles pixels to the backbuffer
@@ -238,13 +237,7 @@ impl Renderer {
 
         // Render the node's mesh if it has one
         if let Some(mesh_index) = node.mesh_index {
-            self.render_mesh(
-                scene,
-                camera,
-                mesh_index,
-                model_matrix,
-                mvp_matrix,
-            );
+            self.render_mesh(scene, camera, mesh_index, model_matrix, mvp_matrix);
         }
     }
 
