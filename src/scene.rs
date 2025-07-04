@@ -273,11 +273,21 @@ impl Primitive {
             .map(|p| Vec3::new(p[0], p[1], p[2]))
             .collect();
 
-        let normals: Vec<Vec3> = reader
-            .read_normals()
-            .ok_or_else(|| SceneError::MissingData("No normals in primitive".into()))?
-            .map(|n| Vec3::new(n[0], n[1], n[2]))
+        let indices: Vec<u32> = reader
+            .read_indices()
+            .ok_or_else(|| SceneError::MissingData("No indices in primitive".into()))?
+            .into_u32()
             .collect();
+
+        let normals: Vec<Vec3> = if let Some(file_normals) = reader.read_normals() {
+            file_normals
+                .map(|n| Vec3::new(n[0], n[1], n[2]))
+                .collect()
+        } else {
+            // Compute smooth normals automatically when they're missing
+            println!("Computing automatic vertex normals");
+            compute_smooth_normals(&positions, &indices)
+        };
 
         let mut texcoords = Vec::new();
         if let Some(file_texcoords) = reader.read_tex_coords(0) {
@@ -289,12 +299,6 @@ impl Primitive {
             // Generate dummy texcoords so the rasterizer doesn't complain
             texcoords.resize(positions.len(), Vec2::new(0.0, 0.0));
         }
-
-        let indices: Vec<u32> = reader
-            .read_indices()
-            .ok_or_else(|| SceneError::MissingData("No indices in primitive".into()))?
-            .into_u32()
-            .collect();
 
         let bounding_sphere = compute_bounding_sphere(&positions);
 
@@ -322,6 +326,41 @@ fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
     let radius = (max - min).length() / 2.0;
 
     BoundingSphere { center, radius }
+}
+
+fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+    let mut normals = vec![Vec3::ZERO; positions.len()];
+    
+    // Compute face normals and accumulate them at each vertex
+    for triangle in indices.chunks_exact(3) {
+        let v0 = positions[triangle[0] as usize];
+        let v1 = positions[triangle[1] as usize];
+        let v2 = positions[triangle[2] as usize];
+        
+        // Compute face normal
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let face_normal = edge1.cross(edge2);
+        
+        // Accumulate face normal at each vertex of the triangle
+        normals[triangle[0] as usize] += face_normal;
+        normals[triangle[1] as usize] += face_normal;
+        normals[triangle[2] as usize] += face_normal;
+    }
+    
+    // Normalize all accumulated normals
+    for normal in &mut normals {
+        if normal.length_squared() > 0.0 {
+            *normal = normal.normalize();
+        } else {
+            // Fallback for vertices with no connected faces
+            *normal = Vec3::new(0.0, 0.0, 1.0);
+        }
+    }
+
+    assert!(normals.len() == positions.len(), "Incorrect normals count");
+    
+    normals
 }
 
 fn get_texture_and_sampler(
