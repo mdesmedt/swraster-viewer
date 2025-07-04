@@ -61,6 +61,12 @@ fn main() {
         Path::new("glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")
     };
 
+    // Extract filename
+    let filename = gltf_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+
     // Save the start time
     let start_time = Instant::now();
 
@@ -70,7 +76,7 @@ fn main() {
     // Create the window and buffer
     let mut buffer = RenderBuffer::new(WIDTH, HEIGHT);
     let mut window = Window::new(
-        "GLTF Viewer - Loading... - ESC to exit",
+        &format!("GLTF Viewer - Loading: {}", filename),
         WIDTH,
         HEIGHT,
         WindowOptions::default(),
@@ -300,9 +306,9 @@ fn main() {
         if elapsed.as_secs_f64() >= 1.0 {
             let fps = frame_count as f64 / elapsed.as_secs_f64();
             window.set_title(&format!(
-                "GLTF Viewer - {:.1} FPS ({:.1}ms) - WSAD to move, Mouse to look - ESC to exit",
+                "GLTF Viewer - {} - {:.1} FPS",
+                filename,
                 fps,
-                1000.0 / fps
             ));
             frame_count = 0;
             last_fps_update = current_time;
