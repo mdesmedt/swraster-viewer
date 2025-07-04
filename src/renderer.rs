@@ -20,7 +20,7 @@ use std::sync::Arc;
  * The renderer is multithreaded and uses SIMD to process 4 pixels (in X) at a time.
 ******************************************************************************/
 
-const TILE_SIZE: i32 = 64;
+const TILE_SIZE: i32 = 32;
 
 pub struct RenderBuffer {
     pub width: usize,
@@ -481,6 +481,8 @@ impl Renderer {
             1.0 / triangle.v2.pos_clip.w,
         ];
 
+        let one_over_area = 1.0 / signed_area;
+
         let z_over_w = [
             triangle.v0.pos_clip.z * one_over_w[0],
             triangle.v1.pos_clip.z * one_over_w[1],
@@ -553,7 +555,7 @@ impl Renderer {
                             pos_world_over_w: pos_world_over_w,
                             primitive_index: triangle.primitive_index as u32,
                             mesh_index: triangle.mesh_index as u32,
-                            one_over_area: 1.0 / signed_area,
+                            one_over_area: one_over_area,
                         };
                         binner.packets.push(packet);
                     }
