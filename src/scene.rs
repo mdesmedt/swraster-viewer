@@ -280,9 +280,7 @@ impl Primitive {
             .collect();
 
         let normals: Vec<Vec3> = if let Some(file_normals) = reader.read_normals() {
-            file_normals
-                .map(|n| Vec3::new(n[0], n[1], n[2]))
-                .collect()
+            file_normals.map(|n| Vec3::new(n[0], n[1], n[2])).collect()
         } else {
             // Compute smooth normals automatically when they're missing
             println!("Computing automatic vertex normals");
@@ -330,24 +328,24 @@ fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
 
 fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
     let mut normals = vec![Vec3::ZERO; positions.len()];
-    
+
     // Compute face normals and accumulate them at each vertex
     for triangle in indices.chunks_exact(3) {
         let v0 = positions[triangle[0] as usize];
         let v1 = positions[triangle[1] as usize];
         let v2 = positions[triangle[2] as usize];
-        
+
         // Compute face normal
         let edge1 = v1 - v0;
         let edge2 = v2 - v0;
         let face_normal = edge1.cross(edge2);
-        
+
         // Accumulate face normal at each vertex of the triangle
         normals[triangle[0] as usize] += face_normal;
         normals[triangle[1] as usize] += face_normal;
         normals[triangle[2] as usize] += face_normal;
     }
-    
+
     // Normalize all accumulated normals
     for normal in &mut normals {
         if normal.length_squared() > 0.0 {
@@ -359,7 +357,7 @@ fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
     }
 
     assert!(normals.len() == positions.len(), "Incorrect normals count");
-    
+
     normals
 }
 

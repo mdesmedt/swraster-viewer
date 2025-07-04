@@ -50,7 +50,8 @@ impl TileRasterizer {
         let primitive_index = packet.primitive_index as usize;
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
-        let material: Option<&Material> = material_index.and_then(|index| scene.materials.get(index));
+        let material: Option<&Material> =
+            material_index.and_then(|index| scene.materials.get(index));
 
         // Determine whether we can do early z testing
         let is_alpha_tested = if let Some(material) = material {
