@@ -328,8 +328,8 @@ impl TileRasterizer {
         let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
-        // TODO: Add better ambient light somehow
-        let ambient = Vec4::splat(0.1);
+        // More ambient light coming from the top, peak intensity of 0.1
+        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5/1.5) * 0.1);
 
         let light_intensity = diffuse + ambient;
 
@@ -419,6 +419,11 @@ impl TileRasterizer {
         // color_r = normal_x;
         // color_g = normal_y;
         // color_b = normal_z;
+
+        // Debug: Show ambient
+        // color_r = ambient;
+        // color_g = ambient;
+        // color_b = ambient;
 
         // Clamp final colors before packing
         color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);
