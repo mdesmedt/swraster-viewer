@@ -39,14 +39,13 @@ impl TileRasterizer {
         let mut p = IVec2::new(x_start, y_start);
 
         // Fetch the light
-        let mesh_index = packet.mesh_index as usize;
-        let mesh = &scene.meshes[mesh_index];
-        let light = &mesh.light;
-        let light_x = Vec4::splat(light.normal.x);
-        let light_y = Vec4::splat(light.normal.y);
-        let light_z = Vec4::splat(light.normal.z);
+        let light = &scene.light;
+        let light_x = Vec4::splat(light.direction.x);
+        let light_y = Vec4::splat(light.direction.y);
+        let light_z = Vec4::splat(light.direction.z);
 
         // Fetch the material
+        let mesh_index = packet.mesh_index as usize;
         let primitive_index = packet.primitive_index as usize;
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;

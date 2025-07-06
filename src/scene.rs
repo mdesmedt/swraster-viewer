@@ -65,6 +65,7 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub cameras: Vec<SceneCamera>,
     pub bounds: SceneBounds,
+    pub light: Light,
 }
 
 pub struct Node {
@@ -78,7 +79,6 @@ pub struct Node {
 pub struct Mesh {
     pub name: Option<String>,
     pub primitives: Vec<Primitive>,
-    pub light: Light,
 }
 
 pub struct Primitive {
@@ -139,6 +139,10 @@ impl Scene {
             materials: Vec::new(),
             cameras: Vec::new(),
             bounds: SceneBounds::new_empty(),
+            light: Light {
+                direction: Vec3::new(0.1, 0.5, 0.5).normalize(),
+                color: Vec3::new(1.0, 1.0, 1.0),
+            },
         };
 
         // Pre-allocate vectors with capacity hints
@@ -316,17 +320,9 @@ impl Mesh {
             primitives.push(Primitive::from_gltf(&primitive, buffers)?);
         }
 
-        // Create a default per-mesh light for now
-        let light_normal = Vec3::new(0.1, 0.5, 0.5).normalize();
-        let light_color = Vec3::new(1.0, 1.0, 1.0);
-
         Ok(Mesh {
             name: mesh.name().map(String::from),
             primitives,
-            light: Light {
-                normal: light_normal,
-                color: light_color,
-            },
         })
     }
 }
@@ -561,7 +557,7 @@ impl SceneCamera {
 
 #[derive(Debug)]
 pub struct Light {
-    pub normal: Vec3,
+    pub direction: Vec3,
     pub color: Vec3,
 }
 
