@@ -14,3 +14,11 @@ rayon = "1.10.0"
 image = "0.25.6"
 boxcar = "0.2.13"
 ordered-float = "5.0.0"
+
+[profile.shipping]
+inherits = "release"
+codegen-units = 1
+lto = true
+
+[build]
+rustflags = ["-C", "target-cpu=native"]
