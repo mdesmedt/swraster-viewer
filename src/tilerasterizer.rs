@@ -329,7 +329,7 @@ impl TileRasterizer {
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
         // More ambient light coming from the top, peak intensity of 0.1
-        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5/1.5) * 0.1);
+        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.1);
 
         let light_intensity = diffuse + ambient;
 

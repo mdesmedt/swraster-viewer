@@ -30,6 +30,35 @@ pub struct BoundingSphere {
     pub radius: f32,
 }
 
+impl BoundingSphere {
+    pub fn new() -> Self {
+        Self {
+            center: Vec3::ZERO,
+            radius: 0.0,
+        }
+    }
+
+    pub fn grow_by_sphere(&mut self, sphere: &BoundingSphere) {
+        let distance = (self.center - sphere.center).length();
+        if distance + sphere.radius > self.radius {
+            self.radius = distance + sphere.radius;
+        }
+    }
+}
+
+// Implement multiplication of Mat4 by BoundingSphere
+impl std::ops::Mul<&BoundingSphere> for Mat4 {
+    type Output = BoundingSphere;
+
+    fn mul(self, sphere: &BoundingSphere) -> Self::Output {
+        let max_scale = (self.x_axis.length() + self.y_axis.length() + self.z_axis.length()) / 3.0;
+        BoundingSphere {
+            center: self.transform_point3(sphere.center),
+            radius: sphere.radius * max_scale,
+        }
+    }
+}
+
 pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub nodes: Vec<Node>,
@@ -43,6 +72,7 @@ pub struct Node {
     pub transform: Mat4, // Local to world matrix
     pub mesh_index: Option<usize>,
     pub camera_index: Option<usize>,
+    pub bounding_sphere_world: BoundingSphere,
 }
 
 pub struct Mesh {
@@ -176,6 +206,19 @@ impl Scene {
             );
         }
 
+        // Compute world-space bounding spheres for all nodes
+        for node in &mut scene.nodes {
+            let transform = node.transform;
+            if let Some(mesh_index) = node.mesh_index {
+                let mesh = &scene.meshes[mesh_index];
+                for primitive in &mesh.primitives {
+                    let transformed_sphere = transform * &primitive.bounding_sphere;
+                    node.bounding_sphere_world
+                        .grow_by_sphere(&transformed_sphere);
+                }
+            }
+        }
+
         // Compute scene bounds
         // Process all nodes in the scene
         for node in &scene.nodes {
@@ -228,11 +271,14 @@ impl Scene {
 
 impl Node {
     fn from_gltf(node: &gltf::Node, transform: Mat4) -> SceneResult<Self> {
+        let mut bounding_sphere = BoundingSphere::new();
+        bounding_sphere.center = (transform * Vec4::new(0.0, 0.0, 0.0, 1.0)).truncate();
         Ok(Node {
             name: node.name().map(String::from),
             transform,
             mesh_index: node.mesh().map(|m| m.index()),
             camera_index: node.camera().map(|c| c.index()),
+            bounding_sphere_world: bounding_sphere,
         })
     }
 

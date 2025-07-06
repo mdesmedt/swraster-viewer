@@ -3,6 +3,7 @@ use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::TileRasterizer;
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec4};
+use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -134,6 +135,7 @@ pub struct Renderer {
     width: i32,
     height: i32,
     tiles: Vec<TileRasterizer>,
+    nodes_by_distance: Vec<usize>,
 }
 
 impl Renderer {
@@ -157,6 +159,7 @@ impl Renderer {
             width,
             height,
             tiles,
+            nodes_by_distance: Vec::new(),
         }
     }
 
@@ -167,8 +170,12 @@ impl Renderer {
         camera: &RenderCamera,
         buffer: &mut RenderBuffer,
     ) {
+        // Compute nodes by distance, front to back
+        self.compute_nodes_by_distance(scene, camera);
+
         // Clip and bin primitives in each node in the scene in parallel
-        scene.nodes.par_iter().for_each(|node| {
+        self.nodes_by_distance.par_iter().for_each(|node_index| {
+            let node = &scene.nodes[*node_index];
             self.render_node(scene, camera, node, camera.view_project_matrix);
         });
 
@@ -216,6 +223,18 @@ impl Renderer {
                     }
                 }
             });
+    }
+
+    fn compute_nodes_by_distance(&mut self, scene: &Scene, camera: &RenderCamera) {
+        self.nodes_by_distance.clear();
+        self.nodes_by_distance
+            .extend(scene.nodes.iter().enumerate().map(|(i, _)| i));
+        self.nodes_by_distance.sort_by_key(|&i| {
+            let node = &scene.nodes[i];
+            let bounding_sphere = &node.bounding_sphere_world;
+            let distance = (camera.position - bounding_sphere.center).length();
+            OrderedFloat(distance)
+        });
     }
 
     fn render_node(
@@ -275,13 +294,7 @@ impl Renderer {
 
         // Convert bounding sphere to world space
         // TODO: Cache world space bounding sphere in the node somehow?
-        let center_world = model_matrix * primitive.bounding_sphere.center.extend(1.0);
-        // TODO: Does not handle non-uniform scaling
-        let radius_world = primitive.bounding_sphere.radius * model_matrix.x_axis.length();
-        let bounding_sphere_world = BoundingSphere {
-            center: center_world.truncate(),
-            radius: radius_world,
-        };
+        let bounding_sphere_world = model_matrix * &primitive.bounding_sphere;
 
         // Frustum culling with bounding sphere
         if !test_sphere_frustum(&bounding_sphere_world, camera) {
