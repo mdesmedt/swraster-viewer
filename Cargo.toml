@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-minifb = "0.28"
 glam = "0.30.3"
 gltf = "1.4.1"
+image = "0.25.6"
+pixels = "0.15.0"
+winit = "0.30.11"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
 crossbeam-utils = "0.8.21"
 rayon = "1.10.0"
-image = "0.25.6"
 boxcar = "0.2.13"
 ordered-float = "5.0.0"
 

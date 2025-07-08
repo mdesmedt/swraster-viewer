@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 const TILE_SIZE: i32 = 32;
 
-pub struct RenderBuffer {
+pub struct RenderBuffer<'a> {
     pub width: usize,
     pub height: usize,
-    pub pixels: Vec<u32>,
+    pub pixels: &'a mut [u8],
 }
 
 #[derive(Copy, Clone)]
@@ -73,26 +73,29 @@ pub struct RasterPacket {
     pub mesh_index: u32,
 }
 
-impl RenderBuffer {
-    pub fn new(width: usize, height: usize) -> Self {
+impl<'a> RenderBuffer<'a> {
+    pub fn new(width: usize, height: usize, pixels: &'a mut [u8]) -> Self {
         Self {
             width,
             height,
-            pixels: vec![0; width * height],
+            pixels,
         }
     }
 
-    pub fn pixels(&self) -> &[u32] {
-        &self.pixels
-    }
-
     pub fn clear(&mut self) {
-        self.pixels.fill(0); // Clear to black
+        for pixel in self.pixels.chunks_exact_mut(4) {
+            pixel[0] = 0x00; // R
+            pixel[1] = 0x00; // G
+            pixel[2] = 0x00; // B
+
+            // Assume A is never written to
+            //pixel[3] = 0xff; // A
+        }
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
+    pub fn set_pixel(&mut self, x: usize, y: usize, channel: usize, color: u8) {
         if x < self.width && y < self.height {
-            self.pixels[y * self.width + x] = color;
+            self.pixels[(y * self.width + x) * 4 + channel] = color;
         }
     }
 }
@@ -189,7 +192,7 @@ impl Renderer {
         let tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
         buffer
             .pixels
-            .par_chunks_mut(buffer.width)
+            .par_chunks_mut(buffer.width * 4)
             .enumerate()
             .for_each(|(y, buffer_row)| {
                 let y = y as i32;
@@ -215,9 +218,25 @@ impl Renderer {
                         // Copy each component of the Vec4 to individual pixels
                         let colors = tile.color[src_index].to_array();
                         for i in 0..4 {
+                            // Write the 4 pixels in the X dimension
                             let pixel_x = dst_base_x + i as i32;
                             if pixel_x < self.width {
-                                buffer_row[pixel_x as usize] = colors[i as usize];
+                                // Read the u32 packed color
+                                let rgba = colors[i as usize];
+                                // Unpack the components
+                                let r: u8 = (rgba >> 0 & 0xFF) as u8;
+                                let g: u8 = (rgba >> 8 & 0xFF) as u8;
+                                let b: u8 = (rgba >> 16 & 0xFF) as u8;
+
+                                // Write the components to the buffer
+                                let offset = pixel_x as usize * 4;
+                                // TODO: Fix this being backwards after switching to pixels
+                                buffer_row[offset] = b;
+                                buffer_row[offset + 1] = g;
+                                buffer_row[offset + 2] = r;
+
+                                // Assume A is never written to
+                                //buffer_row[offset + 3] = 0xFF;
                             }
                         }
                     }

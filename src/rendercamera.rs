@@ -1,4 +1,4 @@
-use glam::{Mat4, Quat, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use gltf::camera::Projection;
 use std::f32::consts::PI;
 
@@ -96,10 +96,10 @@ impl RenderCamera {
         self.position += world_dir * magnitude;
     }
 
-    pub fn rotate_mouse(&mut self, dx: f32, dy: f32) {
+    pub fn rotate_mouse(&mut self, rotation: Vec2) {
         // Update yaw and pitch from mouse movement
-        self.yaw += dx * 0.01;
-        self.pitch = (self.pitch + dy * 0.01).clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
+        self.yaw += rotation.x * 0.01;
+        self.pitch = (self.pitch + rotation.y * 0.01).clamp(-PI / 2.0 + 0.1, PI / 2.0 - 0.1);
     }
 
     pub fn get_rotation(&self) -> Quat {
