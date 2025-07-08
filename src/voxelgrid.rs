@@ -1,4 +1,4 @@
-use glam::{Vec3, Vec4, UVec3};
+use glam::{UVec3, Vec3, Vec4};
 use rayon::prelude::*;
 
 /// A 3D voxel grid that stores light intensity values for each voxel
@@ -35,7 +35,7 @@ impl VoxelGrid {
     pub fn par_iter_mut(&mut self) -> impl ParallelIterator<Item = (UVec3, &mut f32)> {
         let width = self.width;
         let height = self.height;
-        
+
         self.light_intensity
             .par_iter_mut()
             .enumerate()
@@ -44,7 +44,7 @@ impl VoxelGrid {
                 let remainder = index % (width * height);
                 let y = remainder / width;
                 let x = remainder % width;
-                
+
                 (UVec3::new(x as u32, y as u32, z as u32), intensity)
             })
     }

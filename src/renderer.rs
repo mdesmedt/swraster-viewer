@@ -167,12 +167,7 @@ impl Renderer {
     }
 
     // Main render function for the scene
-    pub fn render_scene(
-        &mut self,
-        scene: &Scene,
-        camera: &RenderCamera,
-        buffer: &mut RenderBuffer,
-    ) {
+    pub fn render_scene(&mut self, scene: &Scene, camera: &RenderCamera) {
         // Compute nodes by distance, front to back
         self.compute_nodes_by_distance(scene, camera);
 
@@ -187,8 +182,10 @@ impl Renderer {
         self.tiles.par_iter_mut().for_each(|tile| {
             tile.rasterize_packets(scene, camera);
         });
+    }
 
-        // Copy all tiles pixels to the backbuffer
+    // Copy all tiles pixels to the backbuffer
+    pub fn blit_to_buffer(&self, buffer: &mut RenderBuffer) {
         let tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
         buffer
             .pixels

@@ -393,16 +393,9 @@ impl App {
             return;
         }
 
-        // Grab the buffer from pixels
-        let pixels = self.pixels.as_mut().unwrap();
-        let buffer = pixels.frame_mut();
-        let mut render_buffer = RenderBuffer::new(WIDTH, HEIGHT, buffer);
-
-        // Clear the buffer
-        render_buffer.clear();
-
         // Try to get the render state
         let mut loading_state_guard = self.loading_state.lock().unwrap();
+        let mut loading_complete = false;
 
         match &mut *loading_state_guard {
             LoadingState::Loaded(render_state) => {
@@ -459,31 +452,12 @@ impl App {
                 camera.update_matrices();
 
                 // Render the scene
-                self.renderer
-                    .render_scene(&render_state.scene, camera, &mut render_buffer);
+                self.renderer.render_scene(&render_state.scene, camera);
+
+                loading_complete = true;
             }
             LoadingState::Loading => {
-                // Quaint little loading indicator
-                let center_x = WIDTH as i32 / 2;
-                let center_y = HEIGHT as i32 / 2;
-                let radius = 50;
-                let time = current_time.duration_since(self.start_time).as_secs_f64();
-                let angle = time * 2.0 * std::f64::consts::PI; // One rotation per second
-                const NUM_POINTS: usize = 32;
-                const ANGLE_STEP: f64 = (std::f64::consts::PI * 0.5) / NUM_POINTS as f64;
-                for i in 0..NUM_POINTS {
-                    let point_angle = (i as f64 * ANGLE_STEP) + angle;
-                    let x = center_x as i32 + (point_angle.cos() * radius as f64) as i32;
-                    let y = center_y as i32 + (point_angle.sin() * radius as f64) as i32;
-                    let px = x as usize;
-                    let py = y as usize;
-                    let intensity = i as f64 / NUM_POINTS as f64;
-                    let intensity_int = (intensity * 255.0) as u8;
-                    render_buffer.set_pixel(px, py, 0, intensity_int);
-                    render_buffer.set_pixel(px, py, 1, intensity_int);
-                    render_buffer.set_pixel(px, py, 2, intensity_int);
-                    render_buffer.set_pixel(px, py, 3, 0xFF);
-                }
+                // Do nothing
             }
             LoadingState::Error(error_msg) => {
                 // Scene failed to load, exit
@@ -493,11 +467,41 @@ impl App {
             }
         }
 
-        // Drop the guard before updating the window
-        drop(loading_state_guard);
+        // Grab the buffer from pixels
+        let pixels = self.pixels.as_mut().unwrap();
+        let buffer = pixels.frame_mut();
+        let mut render_buffer = RenderBuffer::new(WIDTH, HEIGHT, buffer);
+
+        if loading_complete {
+            // Blit the rendered tiles to the buffer
+            self.renderer.blit_to_buffer(&mut render_buffer);
+        } else {
+            // Still loading, draw quaint little loading indicator
+            render_buffer.clear();
+            let center_x = WIDTH as i32 / 2;
+            let center_y = HEIGHT as i32 / 2;
+            let radius = 50;
+            let time = current_time.duration_since(self.start_time).as_secs_f64();
+            let angle = time * 2.0 * std::f64::consts::PI; // One rotation per second
+            const NUM_POINTS: usize = 32;
+            const ANGLE_STEP: f64 = (std::f64::consts::PI * 0.5) / NUM_POINTS as f64;
+            for i in 0..NUM_POINTS {
+                let point_angle = (i as f64 * ANGLE_STEP) + angle;
+                let x = center_x as i32 + (point_angle.cos() * radius as f64) as i32;
+                let y = center_y as i32 + (point_angle.sin() * radius as f64) as i32;
+                let px = x as usize;
+                let py = y as usize;
+                let intensity = i as f64 / NUM_POINTS as f64;
+                let intensity_int = (intensity * 255.0) as u8;
+                render_buffer.set_pixel(px, py, 0, intensity_int);
+                render_buffer.set_pixel(px, py, 1, intensity_int);
+                render_buffer.set_pixel(px, py, 2, intensity_int);
+                render_buffer.set_pixel(px, py, 3, 0xFF);
+            }
+        }
 
         if let Err(err) = pixels.render() {
-            eprintln!("pixels.render: {}", err);
+            eprintln!("Pixels render error: {}", err);
             event_loop.exit();
             return;
         }
@@ -533,6 +537,7 @@ impl ApplicationHandler for App {
         let mut pixels = Pixels::new(WIDTH as u32, HEIGHT as u32, surface_texture).unwrap();
 
         // Clear alpha to FF once, never touch it again
+        // TODO: Might be faster to just write alpha, possibly with uint64_t or so?
         pixels.frame_mut().chunks_exact_mut(4).for_each(|pixel| {
             pixel[3] = 0xff;
         });
