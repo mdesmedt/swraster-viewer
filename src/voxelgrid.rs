@@ -214,7 +214,7 @@ impl VoxelGrid {
         }
 
         if count > 0 {
-            sum / count as f32
+            (sum / count as f32).powf(2.0)
         } else {
             0.0
         }
