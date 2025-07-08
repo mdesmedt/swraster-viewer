@@ -1,6 +1,7 @@
 use clap::Parser;
 use glam::{Vec2, Vec3, Vec3A};
 use gltf::Gltf;
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -205,7 +206,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
     // Create and populate a voxel grid if shadows are enabled
     if settings.shadow() {
         // Create raytracer from the scene
-        println!("Creating raytracer...");
+        println!("Creating raytracer");
         let raytracer = RayTracer::new(&scene);
 
         // Use 64x64x64 voxels
@@ -219,42 +220,33 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
             Vec3::from(scene.bounds.max),
         );
 
-        // Fill voxel grid with light intensity based on ray tracing
+        // Fill voxel grid with light intensity based on visibility of the voxel center to the light
         println!(
-            "Computing light intensity for {} voxels...",
+            "Computing light intensity for {} voxels",
             GRID_SIZE * GRID_SIZE * GRID_SIZE
         );
         let light_direction = scene.light.direction;
         let ray_dir = light_direction.normalize();
         let voxel_size = voxel_grid.voxel_size();
+        let center_min = voxel_grid.world_min() + voxel_size * 0.5;
 
-        // TODO: Parallelize
-        for z in 0..GRID_SIZE {
-            for y in 0..GRID_SIZE {
-                for x in 0..GRID_SIZE {
-                    let voxel_center = voxel_grid.voxel_center(x, y, z);
+        voxel_grid.par_iter_mut().for_each(|(coords, intensity)| {
+            // Compute ray origin with some bias to avoid self-shadowing
+            let voxel_center = center_min + coords.as_vec3() * voxel_size;
+            let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
 
-                    // Arbitrary bias to avoid self-shadowing
-                    let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
+            // Trace ray towards the light
+            *intensity = if raytracer.ray_intersect(ray_origin, ray_dir) {
+                0.0 // Light is blocked by scene geometry
+            } else {
+                1.0 // Light reaches this voxel
+            };
+        });
 
-                    // Trace ray from voxel edge towards light source
-                    let light_intensity = if raytracer.ray_intersect(ray_origin, ray_dir) {
-                        0.0 // Light is blocked by scene geometry
-                    } else {
-                        1.0 // Light reaches this voxel
-                    };
-
-                    voxel_grid.set_light_intensity(x, y, z, light_intensity);
-                }
-            }
-        }
-
-        // Apply blur filter to smooth the voxel grid
+        // Apply simple blur to smooth the voxel grid
         voxel_grid.blur_grid();
 
-        println!("Voxel grid finished");
-
-        // Move voxel grid into the scene
+        println!("Voxel grid ready");
         scene.voxel_grid = Some(voxel_grid);
     } else {
         scene.voxel_grid = None;

@@ -1,4 +1,5 @@
-use glam::{Vec3, Vec4};
+use glam::{Vec3, Vec4, UVec3};
+use rayon::prelude::*;
 
 /// A 3D voxel grid that stores light intensity values for each voxel
 pub struct VoxelGrid {
@@ -30,6 +31,34 @@ impl VoxelGrid {
         }
     }
 
+    /// Returns a parallel iterator over mutable light intensity values with their coordinates
+    pub fn par_iter_mut(&mut self) -> impl ParallelIterator<Item = (UVec3, &mut f32)> {
+        let width = self.width;
+        let height = self.height;
+        
+        self.light_intensity
+            .par_iter_mut()
+            .enumerate()
+            .map(move |(index, intensity)| {
+                let z = index / (width * height);
+                let remainder = index % (width * height);
+                let y = remainder / width;
+                let x = remainder % width;
+                
+                (UVec3::new(x as u32, y as u32, z as u32), intensity)
+            })
+    }
+
+    /// Get the world minimum bounds
+    pub fn world_min(&self) -> Vec3 {
+        self.world_min
+    }
+
+    /// Get the world maximum bounds
+    pub fn world_max(&self) -> Vec3 {
+        self.world_max
+    }
+
     /// Get the size of a voxel in world space
     pub fn voxel_size(&self) -> Vec3 {
         let world_size = self.world_max - self.world_min;
@@ -40,17 +69,6 @@ impl VoxelGrid {
         )
     }
 
-    /// Get the center position of a voxel at the given coordinates in world space
-    pub fn voxel_center(&self, x: usize, y: usize, z: usize) -> Vec3 {
-        let voxel_size = self.voxel_size();
-        self.world_min
-            + Vec3::new(
-                (x as f32 + 0.5) * voxel_size.x,
-                (y as f32 + 0.5) * voxel_size.y,
-                (z as f32 + 0.5) * voxel_size.z,
-            )
-    }
-
     /// Get the light intensity at the specified voxel coordinates
     pub fn get_light_intensity(&self, x: usize, y: usize, z: usize) -> f32 {
         if x >= self.width || y >= self.height || z >= self.depth {
@@ -58,15 +76,6 @@ impl VoxelGrid {
         }
         let index = z * self.width * self.height + y * self.width + x;
         self.light_intensity[index]
-    }
-
-    /// Set the light intensity at the specified voxel coordinates
-    pub fn set_light_intensity(&mut self, x: usize, y: usize, z: usize, intensity: f32) {
-        if x >= self.width || y >= self.height || z >= self.depth {
-            return;
-        }
-        let index = z * self.width * self.height + y * self.width + x;
-        self.light_intensity[index] = intensity;
     }
 
     /// Get light intensity for 4 world positions, returning a Vec4
@@ -211,7 +220,7 @@ impl VoxelGrid {
         }
     }
 
-    /// Apply 3x3x3 blur filter to smooth light intensity values
+    /// Simple 3x3x3 blur filter to smooth light intensity values
     pub fn blur_grid(&mut self) {
         let mut blurred = vec![0.0; self.light_intensity.len()];
 
