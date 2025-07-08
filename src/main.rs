@@ -585,6 +585,21 @@ impl ApplicationHandler for App {
                 // the program to gracefully handle redraws requested by the OS.
                 self.render_frame(event_loop);
             }
+            WindowEvent::Resized(physical_size) => {
+                self.pixels
+                    .as_mut()
+                    .unwrap()
+                    .resize_surface(physical_size.width, physical_size.height)
+                    .unwrap();
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let inner_size = self.window.as_ref().unwrap().inner_size();
+                self.pixels
+                    .as_mut()
+                    .unwrap()
+                    .resize_surface(inner_size.width, inner_size.height)
+                    .unwrap();
+            }
             _ => (),
         }
     }
