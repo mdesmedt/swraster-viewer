@@ -66,6 +66,7 @@ pub struct Scene {
     pub cameras: Vec<SceneCamera>,
     pub bounds: SceneBounds,
     pub light: Light,
+    pub voxel_grid: Option<crate::voxelgrid::VoxelGrid>,
 }
 
 pub struct Node {
@@ -143,6 +144,7 @@ impl Scene {
                 direction: Vec3::new(0.1, 0.5, 0.5).normalize(),
                 color: Vec3::new(1.0, 1.0, 1.0),
             },
+            voxel_grid: None,
         };
 
         // Pre-allocate vectors with capacity hints

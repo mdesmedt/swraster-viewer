@@ -139,6 +139,7 @@ impl TileRasterizer {
                         &packet,
                         material,
                         camera,
+                        scene,
                     );
                 }
 
@@ -174,6 +175,7 @@ impl TileRasterizer {
         packet: &RasterPacket,
         material: Option<&Material>,
         camera: &RenderCamera,
+        scene: &Scene,
     ) {
         // Compute the barycentrics
         let bary0: Vec4 = w0 * one_over_area_vec;
@@ -330,7 +332,14 @@ impl TileRasterizer {
         // More ambient light coming from the top, peak intensity of 0.1
         let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.1);
 
-        let light_intensity = diffuse + ambient;
+        // Get voxel grid lighting if available
+        let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
+            voxel_grid.get_filtered_light_intensity_vec(pos_world_x, pos_world_y, pos_world_z)
+        } else {
+            Vec4::splat(1.0)
+        };
+
+        let light_intensity = diffuse * voxel_light_intensity + ambient;
 
         let mut color_r = light_intensity;
         let mut color_g = light_intensity;
@@ -395,7 +404,8 @@ impl TileRasterizer {
 
             // HACK: Roughness just reduces specular intensity
             let roughness_hack = 1.0 - roughness;
-            let specular = metallic * roughness_hack * roughness_hack * n_dot_h_32;
+            let specular =
+                metallic * roughness_hack * roughness_hack * n_dot_h_32 * voxel_light_intensity;
             color_r += specular;
             color_g += specular;
             color_b += specular;
@@ -404,9 +414,9 @@ impl TileRasterizer {
             // TODO: Guarantee a default material instead?
 
             // Add default most shiny specular
-            color_r += n_dot_h_32;
-            color_g += n_dot_h_32;
-            color_b += n_dot_h_32;
+            color_r += n_dot_h_32 * voxel_light_intensity;
+            color_g += n_dot_h_32 * voxel_light_intensity;
+            color_b += n_dot_h_32 * voxel_light_intensity;
         }
 
         // Debug: Show world space position
@@ -419,10 +429,10 @@ impl TileRasterizer {
         // color_g = normal_y;
         // color_b = normal_z;
 
-        // Debug: Show ambient
-        // color_r = ambient;
-        // color_g = ambient;
-        // color_b = ambient;
+        // Debug: Show voxel lighting
+        // color_r = voxel_light_intensity;
+        // color_g = voxel_light_intensity;
+        // color_b = voxel_light_intensity;
 
         // Clamp final colors before packing
         color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);

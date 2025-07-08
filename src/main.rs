@@ -1,7 +1,7 @@
+use clap::Parser;
 use glam::{Vec2, Vec3, Vec3A};
 use gltf::Gltf;
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -19,24 +19,47 @@ use winit::window::{Window, WindowId};
 
 mod bumpqueue;
 mod math;
+mod raytracer;
 mod rendercamera;
 mod renderer;
 mod texture;
 mod tilerasterizer;
+mod voxelgrid;
 
 // TODO: Remove dead code in the GLTF scene boilerplate module. This is just to stop rustc from complaining.
 #[allow(dead_code)]
 mod scene;
 
+use raytracer::RayTracer;
 use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
 use scene::Scene;
 use texture::TextureCache;
+use voxelgrid::VoxelGrid;
 
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
 const CAMERA_SPEED: f32 = 0.15; // Speed relative to scene size per second
 const CAMERA_SPEED_FAST: f32 = 0.6; // Speed when shift is pressed
+
+#[derive(Parser, Clone)]
+#[command(name = "swrast")]
+#[command(about = "Software rasterizer viewer for GLTF files")]
+struct Settings {
+    /// GLTF file to load
+    #[arg(default_value = "glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")]
+    file: String,
+
+    /// Disable shadow computation
+    #[arg(long)]
+    no_shadow: bool,
+}
+
+impl Settings {
+    fn shadow(&self) -> bool {
+        !self.no_shadow
+    }
+}
 
 struct RenderState {
     scene: Scene,
@@ -65,8 +88,8 @@ fn load_gltf(path: &Path) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), g
     import_gltf(Gltf::from_reader(reader)?, Some(base))
 }
 
-fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>) {
-    println!("Loading scene from {}", gltf_path.display());
+fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settings: &Settings) {
+    println!("Loading: {}", gltf_path.display());
 
     // Load the GLTF file
     let (document, buffers) = match load_gltf(&gltf_path) {
@@ -103,7 +126,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>) {
 
     // Create texture cache for the scene
     let mut texture_cache = TextureCache::new(base_dir);
-    let scene = match Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache) {
+    let mut scene = match Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache) {
         Ok(scene) => scene,
         Err(e) => {
             if let Ok(mut state) = loading_state.lock() {
@@ -179,6 +202,64 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>) {
         )
     };
 
+    // Create and populate a voxel grid if shadows are enabled
+    if settings.shadow() {
+        // Create raytracer from the scene
+        println!("Creating raytracer...");
+        let raytracer = RayTracer::new(&scene);
+
+        // Use 64x64x64 voxels
+        const GRID_SIZE: usize = 128;
+
+        let mut voxel_grid = VoxelGrid::new(
+            GRID_SIZE,
+            GRID_SIZE,
+            GRID_SIZE,
+            Vec3::from(scene.bounds.min),
+            Vec3::from(scene.bounds.max),
+        );
+
+        // Fill voxel grid with light intensity based on ray tracing
+        println!(
+            "Computing light intensity for {} voxels...",
+            GRID_SIZE * GRID_SIZE * GRID_SIZE
+        );
+        let light_direction = scene.light.direction;
+        let ray_dir = light_direction.normalize();
+        let voxel_size = voxel_grid.voxel_size();
+
+        // TODO: Parallelize
+        for z in 0..GRID_SIZE {
+            for y in 0..GRID_SIZE {
+                for x in 0..GRID_SIZE {
+                    let voxel_center = voxel_grid.voxel_center(x, y, z);
+
+                    // Arbitrary bias to avoid self-shadowing
+                    let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
+
+                    // Trace ray from voxel edge towards light source
+                    let light_intensity = if raytracer.ray_intersect(ray_origin, ray_dir) {
+                        0.0 // Light is blocked by scene geometry
+                    } else {
+                        1.0 // Light reaches this voxel
+                    };
+
+                    voxel_grid.set_light_intensity(x, y, z, light_intensity);
+                }
+            }
+        }
+
+        // Apply blur filter to smooth the voxel grid
+        voxel_grid.blur_grid();
+
+        println!("Voxel grid finished");
+
+        // Move voxel grid into the scene
+        scene.voxel_grid = Some(voxel_grid);
+    } else {
+        scene.voxel_grid = None;
+    }
+
     // Create and store the render state
     let render_state = RenderState { scene, camera };
     if let Ok(mut state) = loading_state.lock() {
@@ -214,14 +295,11 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        // Get the GLTF file path from command line arguments or use default
-        let args: Vec<String> = env::args().collect();
-        let gltf_path = if args.len() == 2 {
-            Path::new(&args[1])
-        } else {
-            println!("Attempting to load glTF-Sample-Assets model: FlightHelmet");
-            Path::new("glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")
-        };
+        // Parse command line arguments
+        let settings = Settings::parse();
+
+        // Get the GLTF file path from settings
+        let gltf_path = Path::new(&settings.file);
 
         // Extract filename
         let filename = gltf_path
@@ -241,8 +319,9 @@ impl App {
 
         // Start background thread for scene loading
         let gltf_path = gltf_path.to_path_buf(); // Clone the path for the thread
+        let settings_clone = settings.clone();
         thread::spawn(move || {
-            load_scene(&gltf_path, &loading_state_clone);
+            load_scene(&gltf_path, &loading_state_clone, &settings_clone);
         });
 
         // FPS measurement variables
