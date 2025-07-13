@@ -22,3 +22,5 @@ target/
 
 # Ignore the glTF-Sample-Assets folder
 glTF-Sample-Assets/
+
+.devenv
