@@ -489,6 +489,13 @@ impl Material {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();
 
+        let base_color_texture = material
+            .pbr_metallic_roughness()
+            .base_color_texture()
+            .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache));
+        let is_alpha_tested = material.alpha_mode() == gltf::material::AlphaMode::Mask
+            && base_color_texture.is_some();
+
         Ok(Material {
             name: material.name().map(String::from),
             base_color_factor: Vec4::new(
@@ -497,10 +504,7 @@ impl Material {
                 base_color[2],
                 base_color[3],
             ),
-            base_color_texture: material
-                .pbr_metallic_roughness()
-                .base_color_texture()
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
+            base_color_texture,
             metallic_factor: pbr.metallic_factor(),
             roughness_factor: pbr.roughness_factor(),
             metallic_roughness_texture: material
@@ -521,7 +525,7 @@ impl Material {
             occlusion_texture: material
                 .occlusion_texture()
                 .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
-            is_alpha_tested: material.alpha_mode() == gltf::material::AlphaMode::Mask,
+            is_alpha_tested,
             alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),
         })
     }

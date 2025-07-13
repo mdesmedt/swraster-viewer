@@ -48,11 +48,7 @@ impl TextureAndSampler {
             WrapMode::MirroredRepeat => {
                 let abs_coord = coord.abs();
                 let wrapped = abs_coord - abs_coord.floor();
-                if coord < 0.0 {
-                    1.0 - wrapped
-                } else {
-                    wrapped
-                }
+                if coord < 0.0 { 1.0 - wrapped } else { wrapped }
             }
         }
     }
