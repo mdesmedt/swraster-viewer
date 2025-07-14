@@ -536,6 +536,9 @@ impl ApplicationHandler for App {
             SurfaceTexture::new(window_size.width, window_size.height, window.clone());
         let mut pixels = Pixels::new(WIDTH as u32, HEIGHT as u32, surface_texture).unwrap();
 
+        // Set scaling mode
+        pixels.set_scaling_mode(pixels::ScalingMode::Fill);
+
         // Clear alpha to FF once, never touch it again
         // TODO: Might be faster to just write alpha, possibly with uint64_t or so?
         pixels.frame_mut().chunks_exact_mut(4).for_each(|pixel| {
