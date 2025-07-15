@@ -54,12 +54,10 @@ struct Settings {
     /// Disable shadow computation
     #[arg(long)]
     no_shadow: bool,
-}
 
-impl Settings {
-    fn shadow(&self) -> bool {
-        !self.no_shadow
-    }
+    /// Disable vsync
+    #[arg(long)]
+    disable_vsync: bool,
 }
 
 struct RenderState {
@@ -204,7 +202,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
     };
 
     // Create and populate a voxel grid if shadows are enabled
-    if settings.shadow() {
+    if !settings.no_shadow {
         // Create raytracer from the scene
         println!("Creating raytracer");
         let raytracer = RayTracer::new(&scene);
@@ -283,6 +281,7 @@ struct App {
     last_fps_update: Instant,
     last_frame_time: Instant,
     input_state: InputState,
+    settings: Settings,
 }
 
 impl App {
@@ -339,6 +338,7 @@ impl App {
             last_fps_update,
             last_frame_time,
             input_state,
+            settings,
         }
     }
 
@@ -535,6 +535,10 @@ impl ApplicationHandler for App {
         let surface_texture =
             SurfaceTexture::new(window_size.width, window_size.height, window.clone());
         let mut pixels = Pixels::new(WIDTH as u32, HEIGHT as u32, surface_texture).unwrap();
+
+        if self.settings.disable_vsync {
+            pixels.enable_vsync(false);
+        }
 
         // Set scaling mode
         pixels.set_scaling_mode(pixels::ScalingMode::Fill);
