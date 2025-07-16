@@ -41,7 +41,9 @@ use voxelgrid::VoxelGrid;
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
 const CAMERA_SPEED: f32 = 0.15; // Speed relative to scene size per second
-const CAMERA_SPEED_FAST: f32 = 0.6; // Speed when shift is pressed
+const CAMERA_SPEED_FAST: f32 = 0.5; // Speed when shift is pressed
+const KEY_ROTATION_SPEED: f32 = 75.0;
+const KEY_ROTATION_SPEED_FAST: f32 = 150.0;
 
 #[derive(Parser, Clone)]
 #[command(name = "swrast")]
@@ -425,18 +427,24 @@ impl App {
                 }
 
                 // Handle camera rotation using the arrow keys
-                const KEY_ROTATION_SPEED: f32 = 75.0;
+                let key_rotation_speed = if self.input_state.is_key_down(KeyCode::ShiftLeft)
+                    || self.input_state.is_key_down(KeyCode::ShiftRight)
+                {
+                    KEY_ROTATION_SPEED_FAST * delta_time
+                } else {
+                    KEY_ROTATION_SPEED * delta_time
+                };
                 if self.input_state.is_key_down(KeyCode::ArrowLeft) {
-                    camera.rotate_mouse(Vec2::new(-KEY_ROTATION_SPEED * delta_time, 0.0));
+                    camera.rotate_mouse(Vec2::new(-key_rotation_speed, 0.0));
                 }
                 if self.input_state.is_key_down(KeyCode::ArrowRight) {
-                    camera.rotate_mouse(Vec2::new(KEY_ROTATION_SPEED * delta_time, 0.0));
+                    camera.rotate_mouse(Vec2::new(key_rotation_speed, 0.0));
                 }
                 if self.input_state.is_key_down(KeyCode::ArrowUp) {
-                    camera.rotate_mouse(Vec2::new(0.0, -KEY_ROTATION_SPEED * delta_time));
+                    camera.rotate_mouse(Vec2::new(0.0, -key_rotation_speed));
                 }
                 if self.input_state.is_key_down(KeyCode::ArrowDown) {
-                    camera.rotate_mouse(Vec2::new(0.0, KEY_ROTATION_SPEED * delta_time));
+                    camera.rotate_mouse(Vec2::new(0.0, key_rotation_speed));
                 }
 
                 let scene_size = render_state.scene.bounds.diagonal;
