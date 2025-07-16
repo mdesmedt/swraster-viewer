@@ -424,6 +424,21 @@ impl App {
                     move_dir.y -= 1.0; // Down (negative Y in camera space)
                 }
 
+                // Handle camera rotation using the arrow keys
+                const KEY_ROTATION_SPEED: f32 = 75.0;
+                if self.input_state.is_key_down(KeyCode::ArrowLeft) {
+                    camera.rotate_mouse(Vec2::new(-KEY_ROTATION_SPEED * delta_time, 0.0));
+                }
+                if self.input_state.is_key_down(KeyCode::ArrowRight) {
+                    camera.rotate_mouse(Vec2::new(KEY_ROTATION_SPEED * delta_time, 0.0));
+                }
+                if self.input_state.is_key_down(KeyCode::ArrowUp) {
+                    camera.rotate_mouse(Vec2::new(0.0, -KEY_ROTATION_SPEED * delta_time));
+                }
+                if self.input_state.is_key_down(KeyCode::ArrowDown) {
+                    camera.rotate_mouse(Vec2::new(0.0, KEY_ROTATION_SPEED * delta_time));
+                }
+
                 let scene_size = render_state.scene.bounds.diagonal;
 
                 // Normalize movement direction if moving diagonally
