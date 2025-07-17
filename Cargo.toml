@@ -16,7 +16,6 @@ rayon = "1.10.0"
 boxcar = "0.2.13"
 ordered-float = "5.0.0"
 parry3d = "0.21.1"
-nalgebra = "0.32"
 clap = { version = "4.5.40", features = ["derive"] }
 
 [profile.shipping]
