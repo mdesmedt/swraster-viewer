@@ -71,9 +71,6 @@ impl VoxelGrid {
 
     /// Get the light intensity at the specified voxel coordinates
     pub fn get_light_intensity(&self, x: usize, y: usize, z: usize) -> f32 {
-        if x >= self.width || y >= self.height || z >= self.depth {
-            return 0.0;
-        }
         let index = z * self.width * self.height + y * self.width + x;
         self.light_intensity[index]
     }
