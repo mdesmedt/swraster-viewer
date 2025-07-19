@@ -1,7 +1,7 @@
 # swraster-viewer
 Simple software rasterizer which views GLTF files, written in Rust.
 
-![Screenshot](https://github.com/user-attachments/assets/7ab18e2f-8c85-4ef7-a2f4-2e061f5f7840)
+![Screenshot](https://github.com/user-attachments/assets/34c07f66-7047-4191-82eb-e3a47c433d92)
 
 The project has been tested with the assets from the glTF-Sample-Assets repository: https://github.com/KhronosGroup/glTF-Sample-Assets
 
