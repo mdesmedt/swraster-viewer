@@ -23,8 +23,8 @@ With this project I tried to make a relatively simple, relatively performant sof
 The general architecture of the rasterizer is:
 - Load a glTF scene with the `gltf` crate.
 - Iterate over nodes/meshes/primitives in parallel with `rayon`.
-- Project each triangle into clip space, clip against the frustum, and bin the resulting triangles into screen space tiles, using a custom queuing algorithming.
+- Project each triangle into clip space, clip against the frustum, and bin the resulting triangles into screen space tiles, using a pooled segmented queue.
 - Every screen space tile runs in a thread and uses SIMD (`glam`) to edge test, shade and depth test 4 pixels at a time.
-- After all triangles have been processed the tiles are copied into a linear color buffer which is viewed with `minifb`.
+- After all triangles have been processed the tiles are copied into a linear color buffer which is viewed with `pixels`.
 
 Thanks to Fabian “ryg” Giesen for his helpful software rasterizer tutorial series: https://fgiesen.wordpress.com/2013/02/17/optimizing-sw-occlusion-culling-index/
