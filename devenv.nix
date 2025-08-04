@@ -3,6 +3,7 @@
 let
   libs = with pkgs; [
     pkg-config
+    mold
     wayland
     glfw-wayland
     libxkbcommon
@@ -18,7 +19,6 @@ in
 {
   languages.rust = {
     enable = true;
-    channel = "stable";
     components = [
       "rustc"
       "cargo"
