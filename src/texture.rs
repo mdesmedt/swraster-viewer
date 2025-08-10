@@ -1,4 +1,4 @@
-use glam::Vec4;
+use glam::{Mat4, Vec4};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -53,9 +53,9 @@ impl TextureAndSampler {
         }
     }
 
-    pub fn sample_vec4(&self, u_vec: Vec4, v_vec: Vec4) -> [Vec4; 4] {
+    pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4) -> Mat4 {
         // Sample four pixels
-        let mut pixels = [Vec4::ZERO; 4];
+        let mut pixels = Mat4::ZERO;
         for i in 0..4 {
             // Apply wrap modes to UV coordinates
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
@@ -74,16 +74,10 @@ impl TextureAndSampler {
             let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
             let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
 
-            pixels[i] = Vec4::new(r, g, b, a);
+            *pixels.col_mut(i) = Vec4::new(r, g, b, a);
         }
 
-        // Transpose to [reds, greens, blues, alphas]
-        [
-            Vec4::new(pixels[0].x, pixels[1].x, pixels[2].x, pixels[3].x), // All reds
-            Vec4::new(pixels[0].y, pixels[1].y, pixels[2].y, pixels[3].y), // All greens
-            Vec4::new(pixels[0].z, pixels[1].z, pixels[2].z, pixels[3].z), // All blues
-            Vec4::new(pixels[0].w, pixels[1].w, pixels[2].w, pixels[3].w), // All alphas
-        ]
+        pixels.transpose()
     }
 }
 

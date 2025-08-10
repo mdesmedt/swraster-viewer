@@ -371,11 +371,11 @@ impl TileRasterizer {
 
             // If we have a base texture, sample it
             if let Some(diffuse_texture) = &material.base_color_texture {
-                let diffuse_vec = diffuse_texture.sample_vec4(uv_x, uv_y);
+                let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
 
                 // Alpha test
                 if is_alpha_tested {
-                    let alpha = diffuse_vec[3];
+                    let alpha = diffuse_mat.col(3);
                     out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
 
                     // Now do late Z
@@ -387,9 +387,9 @@ impl TileRasterizer {
 
                 // Multiply diffuse color
                 // Simple gamma 2.0 instead of 2.2 for perf
-                color_r *= diffuse_vec[0] * diffuse_vec[0];
-                color_g *= diffuse_vec[1] * diffuse_vec[1];
-                color_b *= diffuse_vec[2] * diffuse_vec[2];
+                color_r *= diffuse_mat.col(0) * diffuse_mat.col(0);
+                color_g *= diffuse_mat.col(1) * diffuse_mat.col(1);
+                color_b *= diffuse_mat.col(2) * diffuse_mat.col(2);
             }
 
             let mut metallic = Vec4::splat(material.metallic_factor);
@@ -397,9 +397,9 @@ impl TileRasterizer {
 
             // If we have a metallic/roughness texture, sample it
             if let Some(spec_texture) = &material.metallic_roughness_texture {
-                let metallic_roughness_vec = spec_texture.sample_vec4(uv_x, uv_y);
-                metallic *= metallic_roughness_vec[0];
-                roughness *= metallic_roughness_vec[1];
+                let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
+                metallic *= metallic_roughness_mat.col(0);
+                roughness *= metallic_roughness_mat.col(1);
             }
 
             // HACK: Roughness just reduces specular intensity
