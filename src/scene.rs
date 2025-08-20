@@ -106,7 +106,9 @@ pub struct Material {
     pub occlusion_texture: Option<TextureAndSampler>,
     pub is_alpha_tested: bool,
     pub is_translucent: bool,
+    pub transmission: f32,
     pub alpha_cutoff_vec: Vec4,
+    pub transmission_texture: Option<TextureAndSampler>,
 }
 
 pub struct SceneCamera {
@@ -512,14 +514,7 @@ impl Material {
         let is_alpha_tested = material.alpha_mode() == gltf::material::AlphaMode::Mask
             && base_color_texture.is_some();
 
-        // Hack to detect translucent materials
         let is_translucent = material.transmission().is_some();
-
-        println!(
-            "Material: {} is_translucent: {}",
-            material.name().unwrap_or("Unnamed"),
-            is_translucent
-        );
 
         Ok(Material {
             name: material.name().map(String::from),
@@ -553,6 +548,14 @@ impl Material {
             is_alpha_tested,
             is_translucent,
             alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),
+            transmission: material
+                .transmission()
+                .map(|t| t.transmission_factor())
+                .unwrap_or(0.0),
+            transmission_texture: material
+                .transmission()
+                .and_then(|t| t.transmission_texture())
+                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
         })
     }
 }

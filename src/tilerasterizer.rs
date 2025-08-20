@@ -297,6 +297,22 @@ impl TileRasterizer {
             bary1,
             bary2,
         ) * w;
+        let uv_x = interpolate_vertex_attribute(
+            packet.uv_over_w[0].x,
+            packet.uv_over_w[1].x,
+            packet.uv_over_w[2].x,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+        let uv_y = interpolate_vertex_attribute(
+            packet.uv_over_w[0].y,
+            packet.uv_over_w[1].y,
+            packet.uv_over_w[2].y,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
 
         // Compute the view direction for each pixel
         let view_dir_x = camera.position.x - pos_world_x;
@@ -345,33 +361,38 @@ impl TileRasterizer {
 
         let light_intensity = diffuse * voxel_light_intensity + ambient;
 
+        // Initialize color vectors with diffuse lighting
         let mut color_r = light_intensity;
         let mut color_g = light_intensity;
         let mut color_b = light_intensity;
-        let mut color_a = Vec4::ONE;
+
+        if !MODE_OPAQUE {
+            let mut transmission = Vec4::splat(material.transmission);
+
+            // Sample transmission texture if provided
+            if let Some(transmission_texture) = &material.transmission_texture {
+                let transmission_mat = transmission_texture.sample4(uv_x, uv_y);
+                transmission *= transmission_mat.col(0);
+            }
+
+            // Multiply 1-transmission to diffuse lighting
+            let inv_transmission = Vec4::ONE - transmission;
+            color_r *= inv_transmission;
+            color_g *= inv_transmission;
+            color_b *= inv_transmission;
+
+            // Add the transmitted color multiplied by the transmission factor
+            let current_color = self.color[self.index_from_xy(p.x, p.y)];
+            let (current_color_r, current_color_g, current_color_b) = unpack_colors(current_color);
+            color_r += current_color_r * transmission;
+            color_g += current_color_g * transmission;
+            color_b += current_color_b * transmission;
+        }
 
         // Apply base color factor
         color_r *= material.base_color_factor.x;
         color_g *= material.base_color_factor.y;
         color_b *= material.base_color_factor.z;
-
-        // Interpolate UVs
-        let uv_x = interpolate_vertex_attribute(
-            packet.uv_over_w[0].x,
-            packet.uv_over_w[1].x,
-            packet.uv_over_w[2].x,
-            bary0,
-            bary1,
-            bary2,
-        ) * w;
-        let uv_y = interpolate_vertex_attribute(
-            packet.uv_over_w[0].y,
-            packet.uv_over_w[1].y,
-            packet.uv_over_w[2].y,
-            bary0,
-            bary1,
-            bary2,
-        ) * w;
 
         // If we have a base texture, sample it
         if let Some(diffuse_texture) = &material.base_color_texture {
@@ -394,26 +415,23 @@ impl TileRasterizer {
             color_r *= diffuse_mat.col(0) * diffuse_mat.col(0);
             color_g *= diffuse_mat.col(1) * diffuse_mat.col(1);
             color_b *= diffuse_mat.col(2) * diffuse_mat.col(2);
-            if !MODE_OPAQUE {
-                // Store alpha blend value from diffuse texture
-                color_a = diffuse_mat.col(3);
-            }
         }
 
-        let mut metallic = Vec4::splat(material.metallic_factor);
         let mut roughness = Vec4::splat(material.roughness_factor);
 
         // If we have a metallic/roughness texture, sample it
         if let Some(spec_texture) = &material.metallic_roughness_texture {
             let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
-            metallic *= metallic_roughness_mat.col(0);
             roughness *= metallic_roughness_mat.col(1);
         }
 
-        // HACK: Roughness just reduces specular intensity
-        let roughness_hack = 1.0 - roughness;
-        let specular =
-            metallic * roughness_hack * roughness_hack * n_dot_h_32 * voxel_light_intensity;
+        // Compute specular
+        let specular_shiny = n_dot_h_32;
+        let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
+        let n_dot_h_blend =
+            specular_shiny * (Vec4::splat(1.0) - roughness) + specular_rough * roughness;
+        let specular = n_dot_h_blend * voxel_light_intensity;
+
         color_r += specular;
         color_g += specular;
         color_b += specular;
@@ -438,28 +456,19 @@ impl TileRasterizer {
         color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
         color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
+        let packed_colors = pack_colors(color_r, color_g, color_b);
+
         if MODE_OPAQUE {
-            // Pack colors into integers
-            let packed_colors = pack_colors(color_r, color_g, color_b);
             self.write_pixels_opaque(p.x, p.y, packed_colors, out_depth, out_mask);
         } else {
-            self.write_pixels_translucent(p.x, p.y, color_r, color_g, color_b, color_a, out_mask);
+            self.write_pixels_translucent(p.x, p.y, packed_colors, out_mask);
         }
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
     #[inline]
     fn depth_test(&mut self, x: i32, y: i32, depth: Vec4, mask: BVec4A) -> (Vec4, BVec4A) {
-        debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
-        let local_y = y - self.screen_min.y;
-        let width = (self.screen_max.x - self.screen_min.x) as usize;
-        let width_vec4 = (width + 3) / 4;
-
-        // x is the leftmost pixel of the 4-pixel SIMD block
-        let local_x = x - self.screen_min.x;
-        let vec4_index = local_x as usize / 4;
-
-        let index = local_y as usize * width_vec4 + vec4_index;
+        let index = self.index_from_xy(x, y);
         // Load current depth values
         let current_depth = self.depth[index];
         // Perform depth test
@@ -482,15 +491,7 @@ impl TileRasterizer {
         final_depth: Vec4,
         final_mask: BVec4A,
     ) {
-        debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
-        let local_y = y - self.screen_min.y;
-        let width = (self.screen_max.x - self.screen_min.x) as usize;
-        let width_vec4 = (width + 3) / 4;
-
-        // x is the leftmost pixel of the 4-pixel SIMD block
-        let local_x = x - self.screen_min.x;
-        let vec4_index = local_x as usize / 4;
-        let index = local_y as usize * width_vec4 + vec4_index;
+        let index = self.index_from_xy(x, y);
         let booleans: [bool; 4] = final_mask.into();
         let mask_bvec4 = BVec4::from(booleans);
 
@@ -503,16 +504,21 @@ impl TileRasterizer {
         self.depth[index] = final_depth;
     }
 
-    fn write_pixels_translucent(
-        &mut self,
-        x: i32,
-        y: i32,
-        color_r: Vec4,
-        color_g: Vec4,
-        color_b: Vec4,
-        color_a: Vec4,
-        final_mask: BVec4A,
-    ) {
+    fn write_pixels_translucent(&mut self, x: i32, y: i32, color: UVec4, final_mask: BVec4A) {
+        let index = self.index_from_xy(x, y);
+        let booleans: [bool; 4] = final_mask.into();
+        let mask_bvec4 = BVec4::from(booleans);
+
+        let current_color = self.color[index];
+
+        // Select final color
+        let final_color = UVec4::select(mask_bvec4, color, current_color);
+
+        // Write color and depth
+        self.color[index] = final_color;
+    }
+
+    fn index_from_xy(&self, x: i32, y: i32) -> usize {
         debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
         let local_y = y - self.screen_min.y;
         let width = (self.screen_max.x - self.screen_min.x) as usize;
@@ -521,24 +527,9 @@ impl TileRasterizer {
         // x is the leftmost pixel of the 4-pixel SIMD block
         let local_x = x - self.screen_min.x;
         let vec4_index = local_x as usize / 4;
+
         let index = local_y as usize * width_vec4 + vec4_index;
-        let booleans: [bool; 4] = final_mask.into();
-        let mask_bvec4 = BVec4::from(booleans);
-
-        let current_color = self.color[index];
-
-        // Lerp between current_color and color based on blend
-        let (current_color_r, current_color_g, current_color_b) = unpack_colors(current_color);
-        let blended_r = current_color_r * (Vec4::ONE - color_a) + color_r * color_a;
-        let blended_g = current_color_g * (Vec4::ONE - color_a) + color_g * color_a;
-        let blended_b = current_color_b * (Vec4::ONE - color_a) + color_b * color_a;
-        let color = pack_colors(blended_r, blended_g, blended_b);
-
-        // Select final color
-        let final_color = UVec4::select(mask_bvec4, color, current_color);
-
-        // Write color and depth
-        self.color[index] = final_color;
+        index
     }
 }
 
