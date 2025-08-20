@@ -71,6 +71,7 @@ pub struct RasterPacket {
     pub uv_over_w: [Vec2; 3],
     pub pos_world_over_w: [Vec3; 3],
     pub mesh_index: u32,
+    pub avg_z: OrderedFloat<f32>,
 }
 
 impl<'a> RenderBuffer<'a> {
@@ -113,7 +114,8 @@ fn create_screen_tile(
     TileRasterizer {
         screen_min,
         screen_max,
-        packets: BumpQueue::new(pool),
+        packets_opaque: BumpQueue::new(pool.clone()),
+        packets_translucent: BumpQueue::new(pool.clone()),
         color: vec![UVec4::ZERO; width_vec4 * height],
         depth: vec![Vec4::splat(f32::INFINITY); width_vec4 * height],
     }
@@ -278,17 +280,30 @@ impl Renderer {
         model_matrix: Mat4,
         mvp_matrix: Mat4,
     ) {
-        // Process primitives in parallel
+        // Render opaque primitives
         let mesh = &scene.meshes[mesh_index];
-        mesh.primitives
+        mesh.primitives_opaque
             .par_iter()
-            .enumerate()
-            .for_each(|(primitive_index, _)| {
-                self.render_primitive(
+            .for_each(|primitive_index| {
+                self.render_primitive::<true>(
                     scene,
                     camera,
                     mesh_index,
-                    primitive_index,
+                    *primitive_index,
+                    model_matrix,
+                    mvp_matrix,
+                );
+            });
+
+        // Render translucent primitives
+        mesh.primitives_translucent
+            .par_iter()
+            .for_each(|primitive_index| {
+                self.render_primitive::<false>(
+                    scene,
+                    camera,
+                    mesh_index,
+                    *primitive_index,
                     model_matrix,
                     mvp_matrix,
                 );
@@ -296,7 +311,7 @@ impl Renderer {
     }
 
     // Assembles a primitive and sends it to the clipper
-    fn render_primitive(
+    fn render_primitive<const MODE_OPAQUE: bool>(
         &self,
         scene: &Scene,
         camera: &RenderCamera,
@@ -388,7 +403,7 @@ impl Renderer {
                 };
 
                 // Send the triangle to the clipper
-                self.clip_against_frustum(triangle);
+                self.clip_against_frustum::<MODE_OPAQUE>(triangle);
             }
         });
     }
@@ -396,7 +411,7 @@ impl Renderer {
     // Clips a triangle against all 6 frustum planes in clip space
     // TODO: Can we get away with only clipping against the near and far planes?
     // TODO: Not robust because it does not do vertex deduplication/welding, but it is fast-ish.
-    fn clip_against_frustum(&self, triangle: Triangle) {
+    fn clip_against_frustum<const MODE_OPAQUE: bool>(&self, triangle: Triangle) {
         // Frustum planes in clip space
         const PLANES: [Vec4; 6] = [
             Vec4::new(0.0, 0.0, 1.0, 1.0),  // Near:  z + w >= 0
@@ -481,12 +496,12 @@ impl Renderer {
             };
 
             // Bin the triangle
-            self.bin_triangle(triangle);
+            self.bin_triangle::<MODE_OPAQUE>(triangle);
         }
     }
 
     // Projects a triangle to screen space and bins it into tiles
-    fn bin_triangle(&self, triangle: Triangle) {
+    fn bin_triangle<const MODE_OPAQUE: bool>(&self, triangle: Triangle) {
         // Compute the screen space bounding box of the triangle
         let p0 = self.clip_to_screen(triangle.v0.pos_clip);
         let p1 = self.clip_to_screen(triangle.v1.pos_clip);
@@ -551,6 +566,11 @@ impl Renderer {
         // Calculate number of bins in x direction
         let bins_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
 
+        // Compute average z
+        let avg_z = OrderedFloat(
+            (triangle.v0.pos_clip.z + triangle.v1.pos_clip.z + triangle.v2.pos_clip.z) / 3.0,
+        );
+
         // Send the packet to all intersecting bins
         for y in min_bin_y..max_bin_y {
             for x in min_bin_x..max_bin_x {
@@ -585,8 +605,14 @@ impl Renderer {
                             primitive_index: triangle.primitive_index as u32,
                             mesh_index: triangle.mesh_index as u32,
                             one_over_area: one_over_area,
+                            avg_z: avg_z,
                         };
-                        binner.packets.push(packet);
+
+                        if MODE_OPAQUE {
+                            binner.packets_opaque.push(packet);
+                        } else {
+                            binner.packets_translucent.push(packet);
+                        }
                     }
                 }
             }

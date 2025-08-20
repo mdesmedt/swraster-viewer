@@ -80,6 +80,8 @@ pub struct Node {
 pub struct Mesh {
     pub name: Option<String>,
     pub primitives: Vec<Primitive>,
+    pub primitives_opaque: Vec<usize>,
+    pub primitives_translucent: Vec<usize>,
 }
 
 pub struct Primitive {
@@ -87,7 +89,7 @@ pub struct Primitive {
     pub normals: Vec<Vec3>,
     pub texcoords: Vec<Vec2>,
     pub indices: Vec<u32>,
-    pub material_index: Option<usize>,
+    pub material_index: usize,
     pub bounding_sphere: BoundingSphere,
 }
 
@@ -103,6 +105,7 @@ pub struct Material {
     pub emissive_texture: Option<TextureAndSampler>,
     pub occlusion_texture: Option<TextureAndSampler>,
     pub is_alpha_tested: bool,
+    pub is_translucent: bool,
     pub alpha_cutoff_vec: Vec4,
 }
 
@@ -176,6 +179,17 @@ impl Scene {
         // Collect cameras
         for camera in document.cameras() {
             scene.cameras.push(SceneCamera::from_gltf(&camera)?);
+        }
+
+        // Pre-separate opaque and translucent primitives
+        for mesh in &mut scene.meshes {
+            for (index, primitive) in mesh.primitives.iter().enumerate() {
+                if scene.materials[primitive.material_index].is_translucent {
+                    mesh.primitives_translucent.push(index);
+                } else {
+                    mesh.primitives_opaque.push(index);
+                }
+            }
         }
 
         // Flatten the GLTF node hierarchy into a single vector for performance reasons
@@ -325,6 +339,8 @@ impl Mesh {
         Ok(Mesh {
             name: mesh.name().map(String::from),
             primitives,
+            primitives_opaque: Vec::new(),
+            primitives_translucent: Vec::new(),
         })
     }
 }
@@ -372,7 +388,7 @@ impl Primitive {
             texcoords,
             indices,
             bounding_sphere,
-            material_index: primitive.material().index(),
+            material_index: primitive.material().index().unwrap_or(0), // TODO: This is wrong. Use a default material instead.
         })
     }
 }
@@ -496,6 +512,15 @@ impl Material {
         let is_alpha_tested = material.alpha_mode() == gltf::material::AlphaMode::Mask
             && base_color_texture.is_some();
 
+        // Hack to detect translucent materials
+        let is_translucent = material.transmission().is_some();
+
+        println!(
+            "Material: {} is_translucent: {}",
+            material.name().unwrap_or("Unnamed"),
+            is_translucent
+        );
+
         Ok(Material {
             name: material.name().map(String::from),
             base_color_factor: Vec4::new(
@@ -526,6 +551,7 @@ impl Material {
                 .occlusion_texture()
                 .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
             is_alpha_tested,
+            is_translucent,
             alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),
         })
     }

@@ -1,8 +1,8 @@
 use crossbeam::queue::SegQueue;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 const BLOCK_SIZE: usize = 128;
 const BLOCK_ALLOC_TRIGGER: usize = BLOCK_SIZE - 1;
@@ -143,6 +143,90 @@ impl<T> BumpQueue<T> {
         self.blocks.clear();
         self.count.store(0, Ordering::Relaxed);
         self.head = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
+    }
+
+    // Sorts the queue in place using the provided comparison function.
+    pub fn sort_by<F>(&mut self, mut compare: F)
+    where
+        F: FnMut(&T, &T) -> std::cmp::Ordering,
+    {
+        let count = self.len();
+        if count <= 1 {
+            return; // Nothing to sort
+        }
+
+        // Perform in-place quicksort directly on the blocks
+        self.quicksort_range(0, count - 1, &mut compare);
+    }
+
+    // Helper method to perform in-place quicksort on a range of indices
+    fn quicksort_range<F>(&mut self, low: usize, high: usize, compare: &mut F)
+    where
+        F: FnMut(&T, &T) -> std::cmp::Ordering,
+    {
+        if low < high {
+            let pivot_index = self.partition(low, high, compare);
+            if pivot_index > 0 {
+                self.quicksort_range(low, pivot_index - 1, compare);
+            }
+            if pivot_index + 1 < high {
+                self.quicksort_range(pivot_index + 1, high, compare);
+            }
+        }
+    }
+
+    // Helper method to partition the range for quicksort
+    fn partition<F>(&mut self, low: usize, high: usize, compare: &mut F) -> usize
+    where
+        F: FnMut(&T, &T) -> std::cmp::Ordering,
+    {
+        // Choose the rightmost element as pivot
+        let pivot = self.get_value(high);
+        let mut i = low;
+
+        for j in low..high {
+            if compare(&self.get_value(j), &pivot) == std::cmp::Ordering::Less {
+                self.swap_values(i, j);
+                i += 1;
+            }
+        }
+
+        self.swap_values(i, high);
+        i
+    }
+
+    // Helper method to get a value at a specific index
+    fn get_value(&self, index: usize) -> T {
+        let block_idx = index / BLOCK_SIZE;
+        let local_idx = index % BLOCK_SIZE;
+        let block = self.pool.get_block(self.blocks[block_idx]);
+        block.read(local_idx)
+    }
+
+    // Helper method to swap two values at specific indices
+    fn swap_values(&mut self, i: usize, j: usize) {
+        if i == j {
+            return;
+        }
+
+        let temp = self.get_value(i);
+        let value_j = self.get_value(j);
+
+        // Write value_j to position i
+        let block_idx_i = i / BLOCK_SIZE;
+        let local_idx_i = i % BLOCK_SIZE;
+        let block_i = self.pool.get_block(self.blocks[block_idx_i]);
+        block_i.write(local_idx_i, value_j);
+
+        // Write temp to position j
+        let block_idx_j = j / BLOCK_SIZE;
+        let local_idx_j = j % BLOCK_SIZE;
+        let block_j = self.pool.get_block(self.blocks[block_idx_j]);
+        block_j.write(local_idx_j, temp);
     }
 }
 

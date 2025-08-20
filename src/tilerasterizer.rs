@@ -10,7 +10,8 @@ use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 pub struct TileRasterizer {
     pub screen_min: IVec2,
     pub screen_max: IVec2,
-    pub packets: BumpQueue<RasterPacket>,
+    pub packets_opaque: BumpQueue<RasterPacket>,
+    pub packets_translucent: BumpQueue<RasterPacket>,
     pub color: Vec<UVec4>,
     pub depth: Vec<Vec4>,
 }
@@ -24,16 +25,29 @@ impl TileRasterizer {
     pub fn rasterize_packets(&mut self, scene: &Scene, camera: &RenderCamera) {
         // Clear the tile first
         self.clear();
-        // Then consume all packets in the queue
-        while let Some(packet) = self.packets.pop() {
-            self.rasterize_packet(scene, camera, packet);
+        // Opaque packets
+        while let Some(packet) = self.packets_opaque.pop() {
+            self.rasterize_packet::<true>(scene, camera, packet);
         }
-        // Reset the queue
-        self.packets.reset();
+        // Sort translucent packets by z, back to front
+        self.packets_translucent
+            .sort_by(|a, b| b.avg_z.cmp(&a.avg_z));
+        // Translucent packets first get collected and then rendered
+        while let Some(packet) = self.packets_translucent.pop() {
+            self.rasterize_packet::<false>(scene, camera, packet);
+        }
+        // Reset the queues
+        self.packets_opaque.reset();
+        self.packets_translucent.reset();
     }
 
     // Main rasterizer code
-    fn rasterize_packet(&mut self, scene: &Scene, camera: &RenderCamera, packet: RasterPacket) {
+    fn rasterize_packet<const MODE_OPAQUE: bool>(
+        &mut self,
+        scene: &Scene,
+        camera: &RenderCamera,
+        packet: RasterPacket,
+    ) {
         let x_start = packet.screen_min.x & !3; // Align left to 4-pixels for SIMD alignment
         let y_start = packet.screen_min.y;
         let mut p = IVec2::new(x_start, y_start);
@@ -49,15 +63,7 @@ impl TileRasterizer {
         let primitive_index = packet.primitive_index as usize;
         let mesh = &scene.meshes[mesh_index];
         let material_index = mesh.primitives[primitive_index].material_index;
-        let material: Option<&Material> =
-            material_index.and_then(|index| scene.materials.get(index));
-
-        // Determine whether we can do early z testing
-        let is_alpha_tested = if let Some(material) = material {
-            material.is_alpha_tested
-        } else {
-            false
-        };
+        let material = &scene.materials[material_index];
 
         // Get triangle vertices in screen space
         let p0 = packet.pos_screen[0];
@@ -125,7 +131,7 @@ impl TileRasterizer {
                     // TODO: Figure out why glam needs two BVec4 types
                     let booleans: [bool; 4] = mask.into();
                     let mask_aligned = BVec4A::from(booleans);
-                    self.shade_pixels(
+                    self.shade_pixels::<MODE_OPAQUE>(
                         p,
                         w0,
                         w1,
@@ -135,7 +141,6 @@ impl TileRasterizer {
                         light_y,
                         light_z,
                         one_over_area_vec,
-                        is_alpha_tested,
                         &packet,
                         material,
                         camera,
@@ -160,7 +165,7 @@ impl TileRasterizer {
 
     // "Pixel shader" for the rasterizer. Shades 4 pixels simultaneously.
     #[inline]
-    fn shade_pixels(
+    fn shade_pixels<const MODE_OPAQUE: bool>(
         &mut self,
         p: IVec2,
         w0: Vec4,
@@ -171,9 +176,8 @@ impl TileRasterizer {
         light_y: Vec4,
         light_z: Vec4,
         one_over_area_vec: Vec4,
-        is_alpha_tested: bool,
         packet: &RasterPacket,
-        material: Option<&Material>,
+        material: &Material,
         camera: &RenderCamera,
         scene: &Scene,
     ) {
@@ -220,7 +224,7 @@ impl TileRasterizer {
         let mut out_mask = mask;
 
         // Early Z test when not alpha testing
-        if !is_alpha_tested {
+        if !material.is_alpha_tested {
             (out_depth, out_mask) = self.depth_test(p.x, p.y, z, mask);
             if !out_mask.any() {
                 return;
@@ -344,80 +348,75 @@ impl TileRasterizer {
         let mut color_r = light_intensity;
         let mut color_g = light_intensity;
         let mut color_b = light_intensity;
+        let mut color_a = Vec4::ONE;
 
-        if let Some(material) = material {
-            // Apply base color factor
-            color_r *= material.base_color_factor.x;
-            color_g *= material.base_color_factor.y;
-            color_b *= material.base_color_factor.z;
+        // Apply base color factor
+        color_r *= material.base_color_factor.x;
+        color_g *= material.base_color_factor.y;
+        color_b *= material.base_color_factor.z;
 
-            // Interpolate UVs
-            let uv_x = interpolate_vertex_attribute(
-                packet.uv_over_w[0].x,
-                packet.uv_over_w[1].x,
-                packet.uv_over_w[2].x,
-                bary0,
-                bary1,
-                bary2,
-            ) * w;
-            let uv_y = interpolate_vertex_attribute(
-                packet.uv_over_w[0].y,
-                packet.uv_over_w[1].y,
-                packet.uv_over_w[2].y,
-                bary0,
-                bary1,
-                bary2,
-            ) * w;
+        // Interpolate UVs
+        let uv_x = interpolate_vertex_attribute(
+            packet.uv_over_w[0].x,
+            packet.uv_over_w[1].x,
+            packet.uv_over_w[2].x,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+        let uv_y = interpolate_vertex_attribute(
+            packet.uv_over_w[0].y,
+            packet.uv_over_w[1].y,
+            packet.uv_over_w[2].y,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
 
-            // If we have a base texture, sample it
-            if let Some(diffuse_texture) = &material.base_color_texture {
-                let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
+        // If we have a base texture, sample it
+        if let Some(diffuse_texture) = &material.base_color_texture {
+            let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
 
-                // Alpha test
-                if is_alpha_tested {
-                    let alpha = diffuse_mat.col(3);
-                    out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
+            // Alpha test
+            if material.is_alpha_tested {
+                let alpha = diffuse_mat.col(3);
+                out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
 
-                    // Now do late Z
-                    (out_depth, out_mask) = self.depth_test(p.x, p.y, z, out_mask);
-                    if !out_mask.any() {
-                        return;
-                    }
+                // Now do late Z
+                (out_depth, out_mask) = self.depth_test(p.x, p.y, z, out_mask);
+                if !out_mask.any() {
+                    return;
                 }
-
-                // Multiply diffuse color
-                // Simple gamma 2.0 instead of 2.2 for perf
-                color_r *= diffuse_mat.col(0) * diffuse_mat.col(0);
-                color_g *= diffuse_mat.col(1) * diffuse_mat.col(1);
-                color_b *= diffuse_mat.col(2) * diffuse_mat.col(2);
             }
 
-            let mut metallic = Vec4::splat(material.metallic_factor);
-            let mut roughness = Vec4::splat(material.roughness_factor);
-
-            // If we have a metallic/roughness texture, sample it
-            if let Some(spec_texture) = &material.metallic_roughness_texture {
-                let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
-                metallic *= metallic_roughness_mat.col(0);
-                roughness *= metallic_roughness_mat.col(1);
+            // Multiply diffuse color
+            // Simple gamma 2.0 instead of 2.2 for perf
+            color_r *= diffuse_mat.col(0) * diffuse_mat.col(0);
+            color_g *= diffuse_mat.col(1) * diffuse_mat.col(1);
+            color_b *= diffuse_mat.col(2) * diffuse_mat.col(2);
+            if !MODE_OPAQUE {
+                // Store alpha blend value from diffuse texture
+                color_a = diffuse_mat.col(3);
             }
-
-            // HACK: Roughness just reduces specular intensity
-            let roughness_hack = 1.0 - roughness;
-            let specular =
-                metallic * roughness_hack * roughness_hack * n_dot_h_32 * voxel_light_intensity;
-            color_r += specular;
-            color_g += specular;
-            color_b += specular;
-        } else {
-            // Missing material
-            // TODO: Guarantee a default material instead?
-
-            // Add default most shiny specular
-            color_r += n_dot_h_32 * voxel_light_intensity;
-            color_g += n_dot_h_32 * voxel_light_intensity;
-            color_b += n_dot_h_32 * voxel_light_intensity;
         }
+
+        let mut metallic = Vec4::splat(material.metallic_factor);
+        let mut roughness = Vec4::splat(material.roughness_factor);
+
+        // If we have a metallic/roughness texture, sample it
+        if let Some(spec_texture) = &material.metallic_roughness_texture {
+            let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
+            metallic *= metallic_roughness_mat.col(0);
+            roughness *= metallic_roughness_mat.col(1);
+        }
+
+        // HACK: Roughness just reduces specular intensity
+        let roughness_hack = 1.0 - roughness;
+        let specular =
+            metallic * roughness_hack * roughness_hack * n_dot_h_32 * voxel_light_intensity;
+        color_r += specular;
+        color_g += specular;
+        color_b += specular;
 
         // Debug: Show world space position
         // color_r = pos_world_x;
@@ -439,29 +438,13 @@ impl TileRasterizer {
         color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
         color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
 
-        // Gamma correct the final colors before packing
-        // Apply gamma 2.0 instead of 2.2 for perf
-        color_r = sqrt_vec(color_r);
-        color_g = sqrt_vec(color_g);
-        color_b = sqrt_vec(color_b);
-
-        // Pack colors into integers
-        let packed_colors = UVec4::new(
-            ((color_r.x * 255.0) as u32) << 16
-                | ((color_g.x * 255.0) as u32) << 8
-                | ((color_b.x * 255.0) as u32),
-            ((color_r.y * 255.0) as u32) << 16
-                | ((color_g.y * 255.0) as u32) << 8
-                | ((color_b.y * 255.0) as u32),
-            ((color_r.z * 255.0) as u32) << 16
-                | ((color_g.z * 255.0) as u32) << 8
-                | ((color_b.z * 255.0) as u32),
-            ((color_r.w * 255.0) as u32) << 16
-                | ((color_g.w * 255.0) as u32) << 8
-                | ((color_b.w * 255.0) as u32),
-        );
-
-        self.write_pixels(p.x, p.y, packed_colors, out_depth, out_mask);
+        if MODE_OPAQUE {
+            // Pack colors into integers
+            let packed_colors = pack_colors(color_r, color_g, color_b);
+            self.write_pixels_opaque(p.x, p.y, packed_colors, out_depth, out_mask);
+        } else {
+            self.write_pixels_translucent(p.x, p.y, color_r, color_g, color_b, color_a, out_mask);
+        }
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
@@ -491,7 +474,7 @@ impl TileRasterizer {
 
     // Perform depth test and write color and depth
     #[inline]
-    fn write_pixels(
+    fn write_pixels_opaque(
         &mut self,
         x: i32,
         y: i32,
@@ -519,4 +502,93 @@ impl TileRasterizer {
         self.color[index] = final_color;
         self.depth[index] = final_depth;
     }
+
+    fn write_pixels_translucent(
+        &mut self,
+        x: i32,
+        y: i32,
+        color_r: Vec4,
+        color_g: Vec4,
+        color_b: Vec4,
+        color_a: Vec4,
+        final_mask: BVec4A,
+    ) {
+        debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
+        let local_y = y - self.screen_min.y;
+        let width = (self.screen_max.x - self.screen_min.x) as usize;
+        let width_vec4 = (width + 3) / 4;
+
+        // x is the leftmost pixel of the 4-pixel SIMD block
+        let local_x = x - self.screen_min.x;
+        let vec4_index = local_x as usize / 4;
+        let index = local_y as usize * width_vec4 + vec4_index;
+        let booleans: [bool; 4] = final_mask.into();
+        let mask_bvec4 = BVec4::from(booleans);
+
+        let current_color = self.color[index];
+
+        // Lerp between current_color and color based on blend
+        let (current_color_r, current_color_g, current_color_b) = unpack_colors(current_color);
+        let blended_r = current_color_r * (Vec4::ONE - color_a) + color_r * color_a;
+        let blended_g = current_color_g * (Vec4::ONE - color_a) + color_g * color_a;
+        let blended_b = current_color_b * (Vec4::ONE - color_a) + color_b * color_a;
+        let color = pack_colors(blended_r, blended_g, blended_b);
+
+        // Select final color
+        let final_color = UVec4::select(mask_bvec4, color, current_color);
+
+        // Write color and depth
+        self.color[index] = final_color;
+    }
+}
+
+fn pack_colors(mut color_r: Vec4, mut color_g: Vec4, mut color_b: Vec4) -> UVec4 {
+    // Gamma correct the final colors before packing
+    // Apply gamma 2.0 instead of 2.2 for perf
+    color_r = sqrt_vec(color_r);
+    color_g = sqrt_vec(color_g);
+    color_b = sqrt_vec(color_b);
+
+    UVec4::new(
+        ((color_r.x * 255.0) as u32) << 16
+            | ((color_g.x * 255.0) as u32) << 8
+            | ((color_b.x * 255.0) as u32),
+        ((color_r.y * 255.0) as u32) << 16
+            | ((color_g.y * 255.0) as u32) << 8
+            | ((color_b.y * 255.0) as u32),
+        ((color_r.z * 255.0) as u32) << 16
+            | ((color_g.z * 255.0) as u32) << 8
+            | ((color_b.z * 255.0) as u32),
+        ((color_r.w * 255.0) as u32) << 16
+            | ((color_g.w * 255.0) as u32) << 8
+            | ((color_b.w * 255.0) as u32),
+    )
+}
+
+fn unpack_colors(color: UVec4) -> (Vec4, Vec4, Vec4) {
+    // Extract red (bits 16-23)
+    let color_r = Vec4::new(
+        ((color.x >> 16) & 0xFF) as f32 / 255.0,
+        ((color.y >> 16) & 0xFF) as f32 / 255.0,
+        ((color.z >> 16) & 0xFF) as f32 / 255.0,
+        ((color.w >> 16) & 0xFF) as f32 / 255.0,
+    );
+
+    // Extract green (bits 8-15)
+    let color_g = Vec4::new(
+        ((color.x >> 8) & 0xFF) as f32 / 255.0,
+        ((color.y >> 8) & 0xFF) as f32 / 255.0,
+        ((color.z >> 8) & 0xFF) as f32 / 255.0,
+        ((color.w >> 8) & 0xFF) as f32 / 255.0,
+    );
+
+    // Extract blue (bits 0-7)
+    let color_b = Vec4::new(
+        (color.x & 0xFF) as f32 / 255.0,
+        (color.y & 0xFF) as f32 / 255.0,
+        (color.z & 0xFF) as f32 / 255.0,
+        (color.w & 0xFF) as f32 / 255.0,
+    );
+
+    (color_r * color_r, color_g * color_g, color_b * color_b)
 }
