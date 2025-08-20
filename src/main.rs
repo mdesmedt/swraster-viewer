@@ -230,18 +230,31 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
         let voxel_size = voxel_grid.voxel_size();
         let center_min = voxel_grid.world_min() + voxel_size * 0.5;
 
-        voxel_grid.par_iter_mut().for_each(|(coords, intensity)| {
-            // Compute ray origin with some bias to avoid self-shadowing
-            let voxel_center = center_min + coords.as_vec3() * voxel_size;
-            let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
+        voxel_grid
+            .par_iter_mut()
+            .for_each(|(coords, out_intensity)| {
+                // Compute ray origin with some bias to avoid self-shadowing
+                let voxel_center = center_min + coords.as_vec3() * voxel_size;
+                let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
 
-            // Trace ray towards the light
-            *intensity = if raytracer.ray_intersect(ray_origin, ray_dir) {
-                0.0 // Light is blocked by scene geometry
-            } else {
-                1.0 // Light reaches this voxel
-            };
-        });
+                // Find all intersections along the ray
+                let intersections = raytracer.ray_intersect(ray_origin, ray_dir);
+
+                let mut intensity = 1.0;
+                for intersection in intersections {
+                    let material_index = raytracer.get_material_index(intersection);
+                    let material = &scene.materials[material_index];
+                    if !material.is_translucent {
+                        // Opaque
+                        intensity = 0.0;
+                        break;
+                    }
+                    // Translucent
+                    intensity *= material.transmission;
+                }
+
+                *out_intensity = intensity;
+            });
 
         // Apply simple blur to smooth the voxel grid
         voxel_grid.blur_grid();

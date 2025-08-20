@@ -8,7 +8,7 @@ use parry3d::{
 
 /// A raytracer that converts scene data to parry3d meshes and provides ray intersection testing
 pub struct RayTracer {
-    shapes: Vec<(SharedShape, Isometry<f32>)>,
+    shapes: Vec<(SharedShape, Isometry<f32>, usize)>, // Added material_index as usize
 }
 
 impl RayTracer {
@@ -24,7 +24,7 @@ impl RayTracer {
                 for primitive in &mesh.primitives {
                     let trimesh = Self::primitive_to_trimesh(node, primitive);
                     let shape = SharedShape::new(trimesh);
-                    shapes.push((shape, Isometry::identity()));
+                    shapes.push((shape, Isometry::identity(), primitive.material_index));
                 }
             }
         }
@@ -57,21 +57,36 @@ impl RayTracer {
         TriMesh::new(vertices, indices).expect("Failed to create TriMesh")
     }
 
-    /// Test if a ray intersects with the scene
-    pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> bool {
+    pub fn get_material_index(&self, shape_index: usize) -> usize {
+        self.shapes[shape_index].2
+    }
+
+    /// Find all intersections along a ray, sorted from nearest to furthest
+    pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Vec<usize> {
         let dir = Vector::new(direction.x, direction.y, direction.z);
         let ray = Ray::new(Point::new(origin.x, origin.y, origin.z), dir);
 
-        for (shape, isometry) in &self.shapes {
+        let mut intersections = Vec::new();
+
+        // Intersect with all shapes
+        for (shape_index, (shape, isometry, _material_index)) in self.shapes.iter().enumerate() {
             if let Some(intersection) =
                 shape.cast_ray_and_get_normal(isometry, &ray, f32::INFINITY, false)
             {
                 // Accept only front-facing intersections
                 if intersection.normal.dot(&dir) < 0.0 {
-                    return true;
+                    intersections.push((shape_index, intersection.time_of_impact));
                 }
             }
         }
-        false
+
+        // Sort by distance from nearest to furthest
+        intersections.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Extract the shape indices
+        intersections
+            .into_iter()
+            .map(|(shape_index, _)| shape_index)
+            .collect()
     }
 }
