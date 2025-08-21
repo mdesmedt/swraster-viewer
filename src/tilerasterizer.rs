@@ -41,9 +41,7 @@ impl TileRasterizer {
     // Fills the tile with the skybox
     // TODO: Optimize with SIMD and with simpler math
     pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
-        let inv_view_matrix = camera.view_matrix.inverse();
-        let inv_proj_matrix = camera.projection_matrix.inverse();
-
+        let inv_viewproj = camera.inverse_view_project_matrix;
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
         let width_vec4 = (tile_width + 3) / 4; // SIMD alignment
@@ -64,11 +62,7 @@ impl TileRasterizer {
                     let ndc_y = (1.0 - (screen_y as f32 + 0.5) / camera.height as f32) * 2.0 - 1.0;
 
                     let clip_pos = Vec4::new(ndc_x, ndc_y, 1.0, 1.0); // Use +1.0 for far plane
-                    let view_pos = inv_proj_matrix * clip_pos;
-                    let view_dir = Vec3::new(view_pos.x, view_pos.y, view_pos.z).normalize();
-                    let world_dir = (inv_view_matrix * view_dir.extend(0.0))
-                        .truncate()
-                        .normalize();
+                    let world_dir = (inv_viewproj * clip_pos).truncate().normalize();
 
                     // Sample the cubemap
                     let cubemap_color = scene.cubemap.sample_cubemap(
