@@ -3,7 +3,7 @@ use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
+use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -38,8 +38,6 @@ impl TileRasterizer {
         self.packets_translucent.reset();
     }
 
-    // Fills the tile with the skybox
-    // TODO: Optimize with SIMD and with simpler math
     pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
         let inv_viewproj = camera.inverse_view_project_matrix;
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
@@ -53,8 +51,11 @@ impl TileRasterizer {
             // Loop over Vec4s in the row
             for x_vec4 in 0..width_vec4 {
                 let screen_x = self.screen_min.x + (x_vec4 as i32 * 4);
+                let index = self.index_from_xy(screen_x, screen_y);
+                let mut out_colors = UVec4::ZERO;
 
                 // Compute one pixel at a time for now
+                // TODO: Optimize with SIMD and with simpler math
                 for i in 0..4 {
                     let pixel_x = screen_x + i as i32;
 
@@ -71,29 +72,22 @@ impl TileRasterizer {
                         Vec4::splat(world_dir.z),
                     );
 
-                    let cubemap_strength = 0.8;
-                    let r = cubemap_color.col(0).x * cubemap_strength;
-                    let g = cubemap_color.col(1).x * cubemap_strength;
-                    let b = cubemap_color.col(2).x * cubemap_strength;
+                    let r = cubemap_color.col(0).x;
+                    let g = cubemap_color.col(1).x;
+                    let b = cubemap_color.col(2).x;
 
                     // Pack color
                     let packed_color =
                         ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32;
-
-                    // Write color
-                    let index = self.index_from_xy(screen_x, screen_y);
-                    if index < self.color.len() {
-                        let mut current_color = self.color[index];
-                        match i {
-                            0 => current_color.x = packed_color,
-                            1 => current_color.y = packed_color,
-                            2 => current_color.z = packed_color,
-                            3 => current_color.w = packed_color,
-                            _ => unreachable!(),
-                        }
-                        self.color[index] = current_color;
+                    match i {
+                        0 => out_colors.x = packed_color,
+                        1 => out_colors.y = packed_color,
+                        2 => out_colors.z = packed_color,
+                        3 => out_colors.w = packed_color,
+                        _ => unreachable!(),
                     }
                 }
+                self.color[index] = out_colors;
             }
         }
     }
@@ -406,8 +400,8 @@ impl TileRasterizer {
         let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
-        // More ambient light coming from the top, peak intensity of 0.1
-        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.1);
+        // More ambient light coming from the top, peak intensity of 0.15
+        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
 
         // Get voxel grid lighting if available
         let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
@@ -504,7 +498,7 @@ impl TileRasterizer {
             .cubemap
             .sample_cubemap(-reflect_x, -reflect_y, -reflect_z);
         let cubemap_strength =
-            ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.2)).clamp(Vec4::ZERO, Vec4::ONE);
+            ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
         color_r += cubemap_mat.col(0) * cubemap_mat.col(0) * cubemap_strength;
         color_g += cubemap_mat.col(1) * cubemap_mat.col(1) * cubemap_strength;
         color_b += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;

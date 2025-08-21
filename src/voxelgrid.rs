@@ -54,11 +54,6 @@ impl VoxelGrid {
         self.world_min
     }
 
-    /// Get the world maximum bounds
-    pub fn world_max(&self) -> Vec3 {
-        self.world_max
-    }
-
     /// Get the size of a voxel in world space
     pub fn voxel_size(&self) -> Vec3 {
         let world_size = self.world_max - self.world_min;
