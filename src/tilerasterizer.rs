@@ -426,15 +426,29 @@ impl TileRasterizer {
         }
 
         // Compute specular
+        let shininess = Vec4::splat(1.0) - roughness;
         let specular_shiny = n_dot_h_32;
         let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
         let n_dot_h_blend =
-            specular_shiny * (Vec4::splat(1.0) - roughness) + specular_rough * roughness;
+            specular_shiny * shininess + specular_rough * roughness;
         let specular = n_dot_h_blend * voxel_light_intensity;
 
         color_r += specular;
         color_g += specular;
         color_b += specular;
+
+        // Reflection vector
+        let dot_vn = view_normal_x * normal_x + view_normal_y * normal_y + view_normal_z * normal_z;
+        let reflect_x = view_normal_x - Vec4::splat(2.0) * dot_vn * normal_x;
+        let reflect_y = view_normal_y - Vec4::splat(2.0) * dot_vn * normal_y;
+        let reflect_z = view_normal_z - Vec4::splat(2.0) * dot_vn * normal_z;
+
+        // Sample cubemap (totally arbitrarily)
+        let cubemap_mat = scene.cubemap.sample_cubemap(reflect_x, reflect_y, reflect_z);
+        let cubemap_strength = ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.2)).clamp(Vec4::ZERO, Vec4::ONE);
+        color_r += cubemap_mat.col(0) * cubemap_strength;
+        color_g += cubemap_mat.col(1) * cubemap_strength;
+        color_b += cubemap_mat.col(2) * cubemap_strength;
 
         // Debug: Show world space position
         // color_r = pos_world_x;
@@ -450,6 +464,11 @@ impl TileRasterizer {
         // color_r = voxel_light_intensity;
         // color_g = voxel_light_intensity;
         // color_b = voxel_light_intensity;
+
+        // Debug: Show cubemap
+        // color_r = cubemap_mat.col(0);
+        // color_g = cubemap_mat.col(1);
+        // color_b = cubemap_mat.col(2);
 
         // Clamp final colors before packing
         color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);

@@ -127,7 +127,11 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
 
     // Create texture cache for the scene
     let mut texture_cache = TextureCache::new(base_dir);
-    let mut scene = match Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache) {
+
+    // Create a texture cache for built-in assets
+    let mut texture_cache_builtin = TextureCache::new("assets".to_string());
+
+    let mut scene = match Scene::from_gltf(&document, &gltf_scene, &buffers, &mut texture_cache, &mut texture_cache_builtin) {
         Ok(scene) => scene,
         Err(e) => {
             if let Ok(mut state) = loading_state.lock() {

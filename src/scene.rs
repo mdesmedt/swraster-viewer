@@ -67,6 +67,7 @@ pub struct Scene {
     pub bounds: SceneBounds,
     pub light: Light,
     pub voxel_grid: Option<crate::voxelgrid::VoxelGrid>,
+    pub cubemap: TextureAndSampler,
 }
 
 pub struct Node {
@@ -138,7 +139,20 @@ impl Scene {
         _gltf_scene: &gltf::Scene, // TODO: Implement GLTF scene logic
         buffers: &[gltf::buffer::Data],
         texture_cache: &mut TextureCache,
+        texture_cache_builtin: &mut TextureCache,
     ) -> SceneResult<Self> {
+        let cubemap_texture = texture_cache_builtin.get_or_create("cubemap.jpg");
+        let cubemap_sampler = Sampler {
+            wrap_s: WrapMode::Repeat,
+            wrap_t: WrapMode::Repeat,
+            _min_filter: Filter::Linear,
+            _mag_filter: Filter::Linear,
+        };
+        let cubemap = TextureAndSampler {
+            texture: cubemap_texture,
+            sampler: cubemap_sampler,
+        };
+
         let mut scene = Scene {
             meshes: Vec::new(),
             nodes: Vec::new(),
@@ -150,6 +164,7 @@ impl Scene {
                 color: Vec3::new(1.0, 1.0, 1.0),
             },
             voxel_grid: None,
+            cubemap,
         };
 
         // Pre-allocate vectors with capacity hints
