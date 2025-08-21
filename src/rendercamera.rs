@@ -5,8 +5,8 @@ use std::f32::consts::PI;
 pub struct RenderCamera {
     pub position: Vec3,
     fov: f32,
-    width: f32,
-    height: f32,
+    pub width: f32,
+    pub height: f32,
     near: f32,
     far: f32,
     yaw: f32,   // Rotation around Y axis

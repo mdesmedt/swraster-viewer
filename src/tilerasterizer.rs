@@ -3,7 +3,7 @@ use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
+use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -17,14 +17,11 @@ pub struct TileRasterizer {
 }
 
 impl TileRasterizer {
-    fn clear(&mut self) {
-        self.color.fill(UVec4::ZERO);
-        self.depth.fill(Vec4::splat(f32::INFINITY));
-    }
-
     pub fn rasterize_packets(&mut self, scene: &Scene, camera: &RenderCamera) {
-        // Clear the tile first
-        self.clear();
+        // Fill the tile with the skybox
+        self.fill_with_skybox(scene, camera);
+        // Clear depth
+        self.depth.fill(Vec4::splat(f32::INFINITY));
         // Opaque packets
         while let Some(packet) = self.packets_opaque.pop() {
             self.rasterize_packet::<true>(scene, camera, packet);
@@ -39,6 +36,71 @@ impl TileRasterizer {
         // Reset the queues
         self.packets_opaque.reset();
         self.packets_translucent.reset();
+    }
+
+    // Fills the tile with the skybox
+    // TODO: Optimize with SIMD and with simpler math
+    pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
+        let inv_view_matrix = camera.view_matrix.inverse();
+        let inv_proj_matrix = camera.projection_matrix.inverse();
+
+        let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
+        let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
+        let width_vec4 = (tile_width + 3) / 4; // SIMD alignment
+
+        // Loop over rows
+        for y in 0..tile_height {
+            let screen_y = self.screen_min.y + y as i32;
+
+            // Loop over Vec4s in the row
+            for x_vec4 in 0..width_vec4 {
+                let screen_x = self.screen_min.x + (x_vec4 as i32 * 4);
+
+                // Compute one pixel at a time for now
+                for i in 0..4 {
+                    let pixel_x = screen_x + i as i32;
+
+                    let ndc_x = (pixel_x as f32 + 0.5) / camera.width as f32 * 2.0 - 1.0;
+                    let ndc_y = (1.0 - (screen_y as f32 + 0.5) / camera.height as f32) * 2.0 - 1.0;
+
+                    let clip_pos = Vec4::new(ndc_x, ndc_y, 1.0, 1.0); // Use +1.0 for far plane
+                    let view_pos = inv_proj_matrix * clip_pos;
+                    let view_dir = Vec3::new(view_pos.x, view_pos.y, view_pos.z).normalize();
+                    let world_dir = (inv_view_matrix * view_dir.extend(0.0))
+                        .truncate()
+                        .normalize();
+
+                    // Sample the cubemap
+                    let cubemap_color = scene.cubemap.sample_cubemap(
+                        Vec4::splat(world_dir.x),
+                        Vec4::splat(world_dir.y),
+                        Vec4::splat(world_dir.z),
+                    );
+
+                    let r = cubemap_color.col(0).x * cubemap_color.col(0).x;
+                    let g = cubemap_color.col(1).x * cubemap_color.col(1).x;
+                    let b = cubemap_color.col(2).x * cubemap_color.col(2).x;
+
+                    // Pack color
+                    let packed_color =
+                        ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32;
+
+                    // Write color
+                    let index = self.index_from_xy(screen_x, screen_y);
+                    if index < self.color.len() {
+                        let mut current_color = self.color[index];
+                        match i {
+                            0 => current_color.x = packed_color,
+                            1 => current_color.y = packed_color,
+                            2 => current_color.z = packed_color,
+                            3 => current_color.w = packed_color,
+                            _ => unreachable!(),
+                        }
+                        self.color[index] = current_color;
+                    }
+                }
+            }
+        }
     }
 
     // Main rasterizer code
@@ -429,8 +491,7 @@ impl TileRasterizer {
         let shininess = Vec4::splat(1.0) - roughness;
         let specular_shiny = n_dot_h_32;
         let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
-        let n_dot_h_blend =
-            specular_shiny * shininess + specular_rough * roughness;
+        let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
         let specular = n_dot_h_blend * voxel_light_intensity;
 
         color_r += specular;
@@ -444,11 +505,14 @@ impl TileRasterizer {
         let reflect_z = view_normal_z - Vec4::splat(2.0) * dot_vn * normal_z;
 
         // Sample cubemap (totally arbitrarily)
-        let cubemap_mat = scene.cubemap.sample_cubemap(reflect_x, reflect_y, reflect_z);
-        let cubemap_strength = ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.2)).clamp(Vec4::ZERO, Vec4::ONE);
-        color_r += cubemap_mat.col(0) * cubemap_strength;
-        color_g += cubemap_mat.col(1) * cubemap_strength;
-        color_b += cubemap_mat.col(2) * cubemap_strength;
+        let cubemap_mat = scene
+            .cubemap
+            .sample_cubemap(-reflect_x, -reflect_y, -reflect_z);
+        let cubemap_strength =
+            ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.2)).clamp(Vec4::ZERO, Vec4::ONE);
+        color_r += cubemap_mat.col(0) * cubemap_mat.col(0) * cubemap_strength;
+        color_g += cubemap_mat.col(1) * cubemap_mat.col(1) * cubemap_strength;
+        color_b += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;
 
         // Debug: Show world space position
         // color_r = pos_world_x;

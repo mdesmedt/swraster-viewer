@@ -60,16 +60,16 @@ impl TextureAndSampler {
     pub fn sample_cubemap(&self, normal_x: Vec4, normal_y: Vec4, normal_z: Vec4) -> Mat4 {
         let mut u_out = Vec4::ZERO;
         let mut v_out = Vec4::ZERO;
-    
+
         for i in 0..4 {
             let x = normal_x[i];
             let y = normal_y[i];
             let z = normal_z[i];
-    
+
             let ax = x.abs();
             let ay = y.abs();
             let az = z.abs();
-    
+
             // dominant axis → pick face
             let (face, sc, tc, ma) = if ax >= ay && ax >= az {
                 if x > 0.0 {
@@ -96,11 +96,11 @@ impl TextureAndSampler {
                     (5u32, -x, -y, az)
                 }
             };
-    
+
             // [-1,1] → [0,1]
             let u = 0.5 * (sc / ma + 1.0);
             let v = 0.5 * (tc / ma + 1.0);
-    
+
             // face placement in atlas (col,row)
             let (col, row) = match face {
                 0 => (2, 1), // +X
@@ -111,15 +111,15 @@ impl TextureAndSampler {
                 5 => (3, 1), // -Z
                 _ => unreachable!(),
             };
-    
+
             // atlas is 4 faces wide × 3 faces tall
             let u_final = (u + col as f32) / 4.0;
-            let v_final = 1.0 -(v + row as f32) / 3.0;
-    
+            let v_final = (v + row as f32) / 3.0;
+
             u_out[i] = u_final;
             v_out[i] = v_final;
         }
-    
+
         // Call the existing sample4 function
         self.sample4(u_out, v_out)
     }

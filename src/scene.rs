@@ -160,7 +160,7 @@ impl Scene {
             cameras: Vec::new(),
             bounds: SceneBounds::new_empty(),
             light: Light {
-                direction: Vec3::new(0.1, 0.5, 0.5).normalize(),
+                direction: Vec3::new(-0.2, 1.0, 0.5).normalize(),
                 color: Vec3::new(1.0, 1.0, 1.0),
             },
             voxel_grid: None,
