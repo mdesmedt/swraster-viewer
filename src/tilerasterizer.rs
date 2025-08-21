@@ -71,9 +71,10 @@ impl TileRasterizer {
                         Vec4::splat(world_dir.z),
                     );
 
-                    let r = cubemap_color.col(0).x * cubemap_color.col(0).x;
-                    let g = cubemap_color.col(1).x * cubemap_color.col(1).x;
-                    let b = cubemap_color.col(2).x * cubemap_color.col(2).x;
+                    let cubemap_strength = 0.8;
+                    let r = cubemap_color.col(0).x * cubemap_strength;
+                    let g = cubemap_color.col(1).x * cubemap_strength;
+                    let b = cubemap_color.col(2).x * cubemap_strength;
 
                     // Pack color
                     let packed_color =

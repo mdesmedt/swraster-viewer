@@ -42,7 +42,7 @@ const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
 const CAMERA_SPEED: f32 = 0.15; // Speed relative to scene size per second
 const CAMERA_SPEED_FAST: f32 = 0.5; // Speed when shift is pressed
-const KEY_ROTATION_SPEED: f32 = 50.0;
+const KEY_ROTATION_SPEED: f32 = 75.0;
 const KEY_ROTATION_SPEED_FAST: f32 = 150.0;
 
 #[derive(Parser, Clone)]
