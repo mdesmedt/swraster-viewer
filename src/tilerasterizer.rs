@@ -294,7 +294,6 @@ impl TileRasterizer {
             }
         }
 
-        // NOTE: Input normal is not normalized
         let input_normal = interpolate_attribute_vec3x4(
             packet.normals[0],
             packet.normals[1],
@@ -302,7 +301,7 @@ impl TileRasterizer {
             bary0,
             bary1,
             bary2,
-        );
+        ).normalize();
 
         let pos_world = interpolate_attribute_vec3x4(
             packet.pos_world_over_w[0],
@@ -441,24 +440,20 @@ impl TileRasterizer {
         color.z += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;
 
         // Debug: Show world space position
-        // color_r = pos_world_x;
-        // color_g = pos_world_y;
-        // color_b = pos_world_z;
+        //color = pos_world;
 
         // Debug: Show normal
-        // color_r = normal_x;
-        // color_g = normal_y;
-        // color_b = normal_z;
+        // color = input_normal;
 
         // Debug: Show voxel lighting
-        // color_r = voxel_light_intensity;
-        // color_g = voxel_light_intensity;
-        // color_b = voxel_light_intensity;
+        // color.x = voxel_light_intensity;
+        // color.y = voxel_light_intensity;
+        // color.z = voxel_light_intensity;
 
         // Debug: Show cubemap
-        // color_r = cubemap_mat.col(0);
-        // color_g = cubemap_mat.col(1);
-        // color_b = cubemap_mat.col(2);
+        // color.x = cubemap_mat.col(0);
+        // color.y = cubemap_mat.col(1);
+        // color.z = cubemap_mat.col(2);
 
         // Clamp final colors before packing
         color = color.clamp(Vec4::ZERO, Vec4::ONE);
