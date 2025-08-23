@@ -53,9 +53,9 @@ struct Settings {
     #[arg(default_value = "glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")]
     file: String,
 
-    /// Disable shadow computation
+    /// Disable shadows
     #[arg(long)]
-    no_shadow: bool,
+    no_shadows: bool,
 
     /// Disable vsync
     #[arg(long)]
@@ -214,7 +214,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
     };
 
     // Create and populate a voxel grid if shadows are enabled
-    if !settings.no_shadow {
+    if !settings.no_shadows {
         // Create raytracer from the scene
         println!("Creating raytracer");
         let raytracer = RayTracer::new(&scene);

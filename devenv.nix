@@ -33,7 +33,7 @@ in
   env.RUSTFLAGS = lib.mkForce "-C link-args=-Wl,-fuse-ld=mold,-rpath,${lib.makeLibraryPath libs}";
 
   git-hooks.hooks = {
-    rustfmt.enable = true;
+    rustfmt.enable = false;
     clippy.enable = false;
   };
 }

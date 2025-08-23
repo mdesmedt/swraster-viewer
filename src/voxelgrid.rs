@@ -1,3 +1,4 @@
+use crate::math::*;
 use glam::{UVec3, Vec3, Vec4};
 use rayon::prelude::*;
 
@@ -111,16 +112,11 @@ impl VoxelGrid {
     }
 
     /// Get linearly filtered light intensity for 4 world positions
-    pub fn get_filtered_light_intensity_vec(
-        &self,
-        pos_world_x: Vec4,
-        pos_world_y: Vec4,
-        pos_world_z: Vec4,
-    ) -> Vec4 {
+    pub fn get_filtered_light_intensity_vec(&self, pos_world: Vec3x4) -> Vec4 {
         // Convert world positions to voxel coordinates
-        let local_x = pos_world_x - self.world_min.x;
-        let local_y = pos_world_y - self.world_min.y;
-        let local_z = pos_world_z - self.world_min.z;
+        let local_x = pos_world.x - self.world_min.x;
+        let local_y = pos_world.y - self.world_min.y;
+        let local_z = pos_world.z - self.world_min.z;
 
         let voxel_size = self.voxel_size();
         let voxel_x_f = local_x / voxel_size.x;

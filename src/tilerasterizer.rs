@@ -3,7 +3,7 @@ use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
+use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -105,9 +105,11 @@ impl TileRasterizer {
 
         // Fetch the light
         let light = &scene.light;
-        let light_x = Vec4::splat(light.direction.x);
-        let light_y = Vec4::splat(light.direction.y);
-        let light_z = Vec4::splat(light.direction.z);
+        let light_dir = Vec3x4::new(
+            Vec4::splat(light.direction.x),
+            Vec4::splat(light.direction.y),
+            Vec4::splat(light.direction.z),
+        );
 
         // Fetch the material
         let mesh_index = packet.mesh_index as usize;
@@ -188,9 +190,7 @@ impl TileRasterizer {
                         w1,
                         w2,
                         mask_aligned,
-                        light_x,
-                        light_y,
-                        light_z,
+                        light_dir,
                         one_over_area_vec,
                         &packet,
                         material,
@@ -223,9 +223,7 @@ impl TileRasterizer {
         w1: Vec4,
         w2: Vec4,
         mask: BVec4A,
-        light_x: Vec4,
-        light_y: Vec4,
-        light_z: Vec4,
+        light_dir: Vec3x4,
         one_over_area_vec: Vec4,
         packet: &RasterPacket,
         material: &Material,
@@ -237,9 +235,9 @@ impl TileRasterizer {
         let bary1: Vec4 = w1 * one_over_area_vec;
         let bary2: Vec4 = w2 * one_over_area_vec;
 
-        // Helper function for attribute interpolation
-        #[inline]
-        fn interpolate_vertex_attribute(
+        // Helper functions for attribute interpolation
+
+        fn interpolate_attribute(
             a: f32,
             b: f32,
             c: f32,
@@ -250,10 +248,24 @@ impl TileRasterizer {
             a * bary0 + b * bary1 + c * bary2
         }
 
+        fn interpolate_attribute_vec3x4(
+            a: Vec3,
+            b: Vec3,
+            c: Vec3,
+            bary0: Vec4,
+            bary1: Vec4,
+            bary2: Vec4,
+        ) -> Vec3x4 {
+            let x = interpolate_attribute(a.x, b.x, c.x, bary0, bary1, bary2);
+            let y = interpolate_attribute(a.y, b.y, c.y, bary0, bary1, bary2);
+            let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
+            Vec3x4::new(x, y, z)
+        }
+
         // Begin attribute interpolation
 
         let w = 1.0
-            / interpolate_vertex_attribute(
+            / interpolate_attribute(
                 packet.one_over_w[0],
                 packet.one_over_w[1],
                 packet.one_over_w[2],
@@ -262,7 +274,7 @@ impl TileRasterizer {
                 bary2,
             );
 
-        let z = interpolate_vertex_attribute(
+        let z = interpolate_attribute(
             packet.z_over_w[0],
             packet.z_over_w[1],
             packet.z_over_w[2],
@@ -282,73 +294,26 @@ impl TileRasterizer {
             }
         }
 
-        let input_normal_x = interpolate_vertex_attribute(
-            packet.normals[0].x,
-            packet.normals[1].x,
-            packet.normals[2].x,
-            bary0,
-            bary1,
-            bary2,
-        );
-        let input_normal_y = interpolate_vertex_attribute(
-            packet.normals[0].y,
-            packet.normals[1].y,
-            packet.normals[2].y,
-            bary0,
-            bary1,
-            bary2,
-        );
-        let input_normal_z = interpolate_vertex_attribute(
-            packet.normals[0].z,
-            packet.normals[1].z,
-            packet.normals[2].z,
+        // NOTE: Input normal is not normalized
+        let input_normal = interpolate_attribute_vec3x4(
+            packet.normals[0],
+            packet.normals[1],
+            packet.normals[2],
             bary0,
             bary1,
             bary2,
         );
 
-        // "Pixel shader" which computes color values for the 4 pixels
-
-        // Compute normal
-        let length_squared = input_normal_x * input_normal_x
-            + input_normal_y * input_normal_y
-            + input_normal_z * input_normal_z;
-        let one_over_length = rsqrt_vec(length_squared);
-        let normal_x = input_normal_x * one_over_length;
-        let normal_y = input_normal_y * one_over_length;
-        let normal_z = input_normal_z * one_over_length;
-
-        // Apply N.L lighting
-        let n_dot_l_x = normal_x * light_x;
-        let n_dot_l_y = normal_y * light_y;
-        let n_dot_l_z = normal_z * light_z;
-        let diffuse = (n_dot_l_x + n_dot_l_y + n_dot_l_z).clamp(Vec4::ZERO, Vec4::ONE);
-
-        let pos_world_x = interpolate_vertex_attribute(
-            packet.pos_world_over_w[0].x,
-            packet.pos_world_over_w[1].x,
-            packet.pos_world_over_w[2].x,
+        let pos_world = interpolate_attribute_vec3x4(
+            packet.pos_world_over_w[0],
+            packet.pos_world_over_w[1],
+            packet.pos_world_over_w[2],
             bary0,
             bary1,
             bary2,
         ) * w;
-        let pos_world_y = interpolate_vertex_attribute(
-            packet.pos_world_over_w[0].y,
-            packet.pos_world_over_w[1].y,
-            packet.pos_world_over_w[2].y,
-            bary0,
-            bary1,
-            bary2,
-        ) * w;
-        let pos_world_z = interpolate_vertex_attribute(
-            packet.pos_world_over_w[0].z,
-            packet.pos_world_over_w[1].z,
-            packet.pos_world_over_w[2].z,
-            bary0,
-            bary1,
-            bary2,
-        ) * w;
-        let uv_x = interpolate_vertex_attribute(
+
+        let uv_x = interpolate_attribute(
             packet.uv_over_w[0].x,
             packet.uv_over_w[1].x,
             packet.uv_over_w[2].x,
@@ -356,7 +321,7 @@ impl TileRasterizer {
             bary1,
             bary2,
         ) * w;
-        let uv_y = interpolate_vertex_attribute(
+        let uv_y = interpolate_attribute(
             packet.uv_over_w[0].y,
             packet.uv_over_w[1].y,
             packet.uv_over_w[2].y,
@@ -365,34 +330,19 @@ impl TileRasterizer {
             bary2,
         ) * w;
 
-        // Compute the view direction for each pixel
-        let view_dir_x = camera.position.x - pos_world_x;
-        let view_dir_y = camera.position.y - pos_world_y;
-        let view_dir_z = camera.position.z - pos_world_z;
-        let view_dir_length_squared =
-            view_dir_x * view_dir_x + view_dir_y * view_dir_y + view_dir_z * view_dir_z;
-        let one_over_view_dir_length = rsqrt_vec(view_dir_length_squared);
-        let view_normal_x = view_dir_x * one_over_view_dir_length;
-        let view_normal_y = view_dir_y * one_over_view_dir_length;
-        let view_normal_z = view_dir_z * one_over_view_dir_length;
+        // Compute N.L diffuse lighting
+        let n_dot_l = input_normal.dot(light_dir);
+        let diffuse = n_dot_l.clamp(Vec4::ZERO, Vec4::ONE);
 
+        // Compute the view direction for each pixel
+        let view_dir = Vec3x4::from_vec3(camera.position) - pos_world;
+        let view_normal = view_dir.normalize();
         // Compute half vector
-        let half_vector_add_x = light_x + view_normal_x;
-        let half_vector_add_y = light_y + view_normal_y;
-        let half_vector_add_z = light_z + view_normal_z;
+        let half_vector_add = light_dir + view_normal;
         // Normalize half vector
-        let half_vector_length_squared = half_vector_add_x * half_vector_add_x
-            + half_vector_add_y * half_vector_add_y
-            + half_vector_add_z * half_vector_add_z;
-        let one_over_half_vector_length = rsqrt_vec(half_vector_length_squared);
-        let half_vector_x = half_vector_add_x * one_over_half_vector_length;
-        let half_vector_y = half_vector_add_y * one_over_half_vector_length;
-        let half_vector_z = half_vector_add_z * one_over_half_vector_length;
+        let half_vector = half_vector_add.normalize();
         // H.N
-        let n_dot_h_x = normal_x * half_vector_x;
-        let n_dot_h_y = normal_y * half_vector_y;
-        let n_dot_h_z = normal_z * half_vector_z;
-        let n_dot_h = (n_dot_h_x + n_dot_h_y + n_dot_h_z).clamp(Vec4::ZERO, Vec4::ONE);
+        let n_dot_h = input_normal.dot(half_vector);
         // Exponentiate
         let n_dot_h_2 = n_dot_h * n_dot_h;
         let n_dot_h_4 = n_dot_h_2 * n_dot_h_2;
@@ -401,11 +351,11 @@ impl TileRasterizer {
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
         // More ambient light coming from the top, peak intensity of 0.15
-        let ambient = (normal_y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
+        let ambient = (input_normal.y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
 
-        // Get voxel grid lighting if available
+        // Get voxel grid lighting if available, for shadows
         let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
-            voxel_grid.get_filtered_light_intensity_vec(pos_world_x, pos_world_y, pos_world_z)
+            voxel_grid.get_filtered_light_intensity_vec(pos_world)
         } else {
             Vec4::splat(1.0)
         };
@@ -413,9 +363,7 @@ impl TileRasterizer {
         let light_intensity = diffuse * voxel_light_intensity + ambient;
 
         // Initialize color vectors with diffuse lighting
-        let mut color_r = light_intensity;
-        let mut color_g = light_intensity;
-        let mut color_b = light_intensity;
+        let mut color = Vec3x4::new(light_intensity, light_intensity, light_intensity);
 
         if !MODE_OPAQUE {
             let mut transmission = Vec4::splat(material.transmission);
@@ -428,22 +376,16 @@ impl TileRasterizer {
 
             // Multiply 1-transmission to diffuse lighting
             let inv_transmission = Vec4::ONE - transmission;
-            color_r *= inv_transmission;
-            color_g *= inv_transmission;
-            color_b *= inv_transmission;
+            color *= inv_transmission;
 
             // Add the transmitted color multiplied by the transmission factor
-            let current_color = self.color[self.index_from_xy(p.x, p.y)];
-            let (current_color_r, current_color_g, current_color_b) = unpack_colors(current_color);
-            color_r += current_color_r * transmission;
-            color_g += current_color_g * transmission;
-            color_b += current_color_b * transmission;
+            let current_color_packed = self.color[self.index_from_xy(p.x, p.y)];
+            let current_color = unpack_colors(current_color_packed);
+            color += current_color * transmission;
         }
 
         // Apply base color factor
-        color_r *= material.base_color_factor.x;
-        color_g *= material.base_color_factor.y;
-        color_b *= material.base_color_factor.z;
+        color *= material.base_color_factor;
 
         // If we have a base texture, sample it
         if let Some(diffuse_texture) = &material.base_color_texture {
@@ -463,9 +405,9 @@ impl TileRasterizer {
 
             // Multiply diffuse color
             // Simple gamma 2.0 instead of 2.2 for perf
-            color_r *= diffuse_mat.col(0) * diffuse_mat.col(0);
-            color_g *= diffuse_mat.col(1) * diffuse_mat.col(1);
-            color_b *= diffuse_mat.col(2) * diffuse_mat.col(2);
+            color.x *= diffuse_mat.col(0) * diffuse_mat.col(0);
+            color.y *= diffuse_mat.col(1) * diffuse_mat.col(1);
+            color.z *= diffuse_mat.col(2) * diffuse_mat.col(2);
         }
 
         let mut roughness = Vec4::splat(material.roughness_factor);
@@ -483,25 +425,20 @@ impl TileRasterizer {
         let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
         let specular = n_dot_h_blend * voxel_light_intensity;
 
-        color_r += specular;
-        color_g += specular;
-        color_b += specular;
+        color += specular;
 
         // Reflection vector
-        let dot_vn = view_normal_x * normal_x + view_normal_y * normal_y + view_normal_z * normal_z;
-        let reflect_x = view_normal_x - Vec4::splat(2.0) * dot_vn * normal_x;
-        let reflect_y = view_normal_y - Vec4::splat(2.0) * dot_vn * normal_y;
-        let reflect_z = view_normal_z - Vec4::splat(2.0) * dot_vn * normal_z;
+        let reflect = view_normal.reflect(input_normal);
 
         // Sample cubemap (totally arbitrarily)
         let cubemap_mat = scene
             .cubemap
-            .sample_cubemap(-reflect_x, -reflect_y, -reflect_z);
+            .sample_cubemap(-reflect.x, -reflect.y, -reflect.z);
         let cubemap_strength =
             ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
-        color_r += cubemap_mat.col(0) * cubemap_mat.col(0) * cubemap_strength;
-        color_g += cubemap_mat.col(1) * cubemap_mat.col(1) * cubemap_strength;
-        color_b += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;
+        color.x += cubemap_mat.col(0) * cubemap_mat.col(0) * cubemap_strength;
+        color.y += cubemap_mat.col(1) * cubemap_mat.col(1) * cubemap_strength;
+        color.z += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;
 
         // Debug: Show world space position
         // color_r = pos_world_x;
@@ -524,11 +461,9 @@ impl TileRasterizer {
         // color_b = cubemap_mat.col(2);
 
         // Clamp final colors before packing
-        color_r = color_r.clamp(Vec4::ZERO, Vec4::ONE);
-        color_g = color_g.clamp(Vec4::ZERO, Vec4::ONE);
-        color_b = color_b.clamp(Vec4::ZERO, Vec4::ONE);
+        color = color.clamp(Vec4::ZERO, Vec4::ONE);
 
-        let packed_colors = pack_colors(color_r, color_g, color_b);
+        let packed_colors = pack_colors(color);
 
         if MODE_OPAQUE {
             self.write_pixels_opaque(p.x, p.y, packed_colors, out_depth, out_mask);
@@ -605,12 +540,12 @@ impl TileRasterizer {
     }
 }
 
-fn pack_colors(mut color_r: Vec4, mut color_g: Vec4, mut color_b: Vec4) -> UVec4 {
+fn pack_colors(color: Vec3x4) -> UVec4 {
     // Gamma correct the final colors before packing
     // Apply gamma 2.0 instead of 2.2 for perf
-    color_r = sqrt_vec(color_r);
-    color_g = sqrt_vec(color_g);
-    color_b = sqrt_vec(color_b);
+    let color_r = sqrt_vec(color.x);
+    let color_g = sqrt_vec(color.y);
+    let color_b = sqrt_vec(color.z);
 
     UVec4::new(
         ((color_r.x * 255.0) as u32) << 16
@@ -628,7 +563,7 @@ fn pack_colors(mut color_r: Vec4, mut color_g: Vec4, mut color_b: Vec4) -> UVec4
     )
 }
 
-fn unpack_colors(color: UVec4) -> (Vec4, Vec4, Vec4) {
+fn unpack_colors(color: UVec4) -> Vec3x4 {
     // Extract red (bits 16-23)
     let color_r = Vec4::new(
         ((color.x >> 16) & 0xFF) as f32 / 255.0,
@@ -653,5 +588,5 @@ fn unpack_colors(color: UVec4) -> (Vec4, Vec4, Vec4) {
         (color.w & 0xFF) as f32 / 255.0,
     );
 
-    (color_r * color_r, color_g * color_g, color_b * color_b)
+    Vec3x4::new(color_r * color_r, color_g * color_g, color_b * color_b)
 }
