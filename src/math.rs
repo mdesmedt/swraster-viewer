@@ -58,8 +58,16 @@ impl Vec3x4 {
         Self { x, y, z }
     }
 
+    pub fn from_f32(x: f32, y: f32, z: f32) -> Self {
+        Self::new(Vec4::splat(x), Vec4::splat(y), Vec4::splat(z))
+    }
+
     pub fn from_vec3(v: Vec3) -> Self {
         Self::new(Vec4::splat(v.x), Vec4::splat(v.y), Vec4::splat(v.z))
+    }
+
+    pub fn from_vec4(x: Vec4) -> Self {
+        Self::new(x, x, x)
     }
 
     pub fn dot(&self, other: Vec3x4) -> Vec4 {
@@ -185,6 +193,14 @@ impl Mul<Vec4> for Vec3x4 {
 
     fn mul(self, vec4: Vec4) -> Self {
         Self::new(self.x * vec4, self.y * vec4, self.z * vec4)
+    }
+}
+
+impl MulAssign for Vec3x4 {
+    fn mul_assign(&mut self, other: Self) {
+        self.x *= other.x;
+        self.y *= other.y;
+        self.z *= other.z;
     }
 }
 

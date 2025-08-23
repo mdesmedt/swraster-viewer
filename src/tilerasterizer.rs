@@ -301,7 +301,8 @@ impl TileRasterizer {
             bary0,
             bary1,
             bary2,
-        ).normalize();
+        )
+        .normalize();
 
         let pos_world = interpolate_attribute_vec3x4(
             packet.pos_world_over_w[0],
@@ -361,32 +362,12 @@ impl TileRasterizer {
 
         let light_intensity = diffuse * voxel_light_intensity + ambient;
 
-        // Initialize color vectors with diffuse lighting
-        let mut color = Vec3x4::new(light_intensity, light_intensity, light_intensity);
-
-        if !MODE_OPAQUE {
-            let mut transmission = Vec4::splat(material.transmission);
-
-            // Sample transmission texture if provided
-            if let Some(transmission_texture) = &material.transmission_texture {
-                let transmission_mat = transmission_texture.sample4(uv_x, uv_y);
-                transmission *= transmission_mat.col(0);
-            }
-
-            // Multiply 1-transmission to diffuse lighting
-            let inv_transmission = Vec4::ONE - transmission;
-            color *= inv_transmission;
-
-            // Add the transmitted color multiplied by the transmission factor
-            let current_color_packed = self.color[self.index_from_xy(p.x, p.y)];
-            let current_color = unpack_colors(current_color_packed);
-            color += current_color * transmission;
-        }
-
-        // Apply base color factor
-        color.x *= material.base_color_factor.x;
-        color.y *= material.base_color_factor.y;
-        color.z *= material.base_color_factor.z;
+        // Diffuse starts with the base color factor
+        let mut diffuse = Vec3x4::from_f32(
+            material.base_color_factor.x,
+            material.base_color_factor.y,
+            material.base_color_factor.z,
+        );
 
         // If we have a base texture, sample it
         if let Some(diffuse_texture) = &material.base_color_texture {
@@ -406,18 +387,21 @@ impl TileRasterizer {
 
             // Multiply diffuse color
             // Simple gamma 2.0 instead of 2.2 for perf
-            color.x *= diffuse_mat.col(0) * diffuse_mat.col(0);
-            color.y *= diffuse_mat.col(1) * diffuse_mat.col(1);
-            color.z *= diffuse_mat.col(2) * diffuse_mat.col(2);
+            diffuse.x *= diffuse_mat.col(0) * diffuse_mat.col(0);
+            diffuse.y *= diffuse_mat.col(1) * diffuse_mat.col(1);
+            diffuse.z *= diffuse_mat.col(2) * diffuse_mat.col(2);
         }
 
         let mut roughness = Vec4::splat(material.roughness_factor);
+        let mut metallic = Vec4::splat(material.metallic_factor);
 
         // If we have a metallic/roughness texture, sample it
         if let Some(spec_texture) = &material.metallic_roughness_texture {
             let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
             roughness *= metallic_roughness_mat.col(1);
+            metallic *= metallic_roughness_mat.col(2);
         }
+        let dielectric = Vec4::splat(1.0) - metallic;
 
         // Compute specular
         let shininess = Vec4::splat(1.0) - roughness;
@@ -426,20 +410,57 @@ impl TileRasterizer {
         let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
         let specular = n_dot_h_blend * voxel_light_intensity;
 
-        color += specular;
+        // Now compute the color, starting with irradiance
+        // TODO: This is wrong for metallic, but without filtered cubemaps it's tricky to fix
+        let mut color = Vec3x4::from_vec4(light_intensity);
 
-        // Reflection vector
+        // For translucent materials, blend in the current framebuffer color
+        if !MODE_OPAQUE {
+            let mut transmission = Vec4::splat(material.transmission);
+
+            // Sample transmission texture if provided
+            if let Some(transmission_texture) = &material.transmission_texture {
+                let transmission_mat = transmission_texture.sample4(uv_x, uv_y);
+                transmission *= transmission_mat.col(0);
+            }
+
+            // Multiply 1-transmission to diffuse lighting
+            let inv_transmission = Vec4::ONE - transmission;
+            color *= inv_transmission;
+
+            // Add the transmitted color multiplied by the transmission factor
+            let current_color_packed = self.color[self.index_from_xy(p.x, p.y)];
+            let current_color = unpack_colors(current_color_packed);
+            color += current_color * transmission;
+        }
+
+        // Multiply by diffuse color
+        color *= diffuse;
+
+        // Add dielectric specular
+        color += specular * dielectric;
+
+        // Add metallic specular
+        color += diffuse * specular * metallic;
+
+        // Sample cubemap (with some totally arbitrary weighting)
+        // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
         let reflect = view_normal.reflect(input_normal);
-
-        // Sample cubemap (totally arbitrarily)
         let cubemap_mat = scene
             .cubemap
             .sample_cubemap(-reflect.x, -reflect.y, -reflect.z);
-        let cubemap_strength =
+        let dielectric_strength =
             ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
-        color.x += cubemap_mat.col(0) * cubemap_mat.col(0) * cubemap_strength;
-        color.y += cubemap_mat.col(1) * cubemap_mat.col(1) * cubemap_strength;
-        color.z += cubemap_mat.col(2) * cubemap_mat.col(2) * cubemap_strength;
+        let metallic_strength = metallic * shininess;
+        let cubemap_color = Vec3x4::new(
+            cubemap_mat.col(0) * cubemap_mat.col(0),
+            cubemap_mat.col(1) * cubemap_mat.col(1),
+            cubemap_mat.col(2) * cubemap_mat.col(2),
+        );
+        // Add dielectric cubemap contribution
+        color += cubemap_color * dielectric_strength;
+        // Add metallic cubemap contribution
+        color += cubemap_color * diffuse * metallic_strength;
 
         // Debug: Show world space position
         //color = pos_world;
