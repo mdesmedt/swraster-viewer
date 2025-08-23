@@ -384,7 +384,9 @@ impl TileRasterizer {
         }
 
         // Apply base color factor
-        color *= material.base_color_factor;
+        color.x *= material.base_color_factor.x;
+        color.y *= material.base_color_factor.y;
+        color.z *= material.base_color_factor.z;
 
         // If we have a base texture, sample it
         if let Some(diffuse_texture) = &material.base_color_texture {
