@@ -34,6 +34,7 @@ pub struct Vertex {
     pub pos_clip: Vec4,
     pub pos_world: Vec3,
     pub normal: Vec3,
+    pub tangent: Vec3,
     pub uv: Vec2,
 }
 
@@ -43,6 +44,7 @@ impl Vertex {
             pos_clip: Vec4::ZERO,
             pos_world: Vec3::ZERO,
             normal: Vec3::ZERO,
+            tangent: Vec3::ZERO,
             uv: Vec2::ZERO,
         }
     }
@@ -68,6 +70,7 @@ pub struct RasterPacket {
     pub one_over_w: [f32; 3],
     pub primitive_index: u32,
     pub normals: [Vec3; 3],
+    pub tangents: [Vec3; 3],
     pub uv_over_w: [Vec2; 3],
     pub pos_world_over_w: [Vec3; 3],
     pub mesh_index: u32,
@@ -334,6 +337,7 @@ impl Renderer {
 
         let positions = &primitive.positions;
         let normals = &primitive.normals;
+        let tangents = &primitive.tangents;
         let texcoords = &primitive.texcoords;
         let indices = &primitive.indices;
 
@@ -369,33 +373,36 @@ impl Renderer {
                 let clip1 = mvp_matrix * local1.extend(1.0);
                 let clip2 = mvp_matrix * local2.extend(1.0);
 
-                // Read normals
-                let normal0 = normals[i0];
-                let normal1 = normals[i1];
-                let normal2 = normals[i2];
-
                 // Rotate normals to world space (assume uniform scaling)
-                let normal_world0 = rotation_matrix * normal0;
-                let normal_world1 = rotation_matrix * normal1;
-                let normal_world2 = rotation_matrix * normal2;
+                let normal_world0 = rotation_matrix * normals[i0];
+                let normal_world1 = rotation_matrix * normals[i1];
+                let normal_world2 = rotation_matrix * normals[i2];
+
+                // Rotate tangents to world space (assume uniform scaling)
+                let tangent_world0 = rotation_matrix * tangents[i0];
+                let tangent_world1 = rotation_matrix * tangents[i1];
+                let tangent_world2 = rotation_matrix * tangents[i2];
 
                 let triangle = Triangle {
                     v0: Vertex {
                         pos_clip: clip0,
                         pos_world: world0.truncate(),
                         normal: normal_world0,
+                        tangent: tangent_world0,
                         uv: texcoords[i0],
                     },
                     v1: Vertex {
                         pos_clip: clip1,
                         pos_world: world1.truncate(),
                         normal: normal_world1,
+                        tangent: tangent_world1,
                         uv: texcoords[i1],
                     },
                     v2: Vertex {
                         pos_clip: clip2,
                         pos_world: world2.truncate(),
                         normal: normal_world2,
+                        tangent: tangent_world2,
                         uv: texcoords[i2],
                     },
                     mesh_index,
@@ -438,6 +445,7 @@ impl Renderer {
                 pos_clip: v0.pos_clip + (v1.pos_clip - v0.pos_clip) * t,
                 pos_world: v0.pos_world + (v1.pos_world - v0.pos_world) * t,
                 normal: v0.normal + (v1.normal - v0.normal) * t,
+                tangent: v0.tangent + (v1.tangent - v0.tangent) * t,
                 uv: v0.uv + (v1.uv - v0.uv) * t,
             }
         }
@@ -534,6 +542,11 @@ impl Renderer {
         ];
 
         let normals = [triangle.v0.normal, triangle.v1.normal, triangle.v2.normal];
+        let tangents = [
+            triangle.v0.tangent,
+            triangle.v1.tangent,
+            triangle.v2.tangent,
+        ];
 
         let uv_over_w = [
             triangle.v0.uv * one_over_w[0],
@@ -600,6 +613,7 @@ impl Renderer {
                             z_over_w: z_over_w,
                             one_over_w: one_over_w,
                             normals: normals,
+                            tangents: tangents,
                             uv_over_w: uv_over_w,
                             pos_world_over_w: pos_world_over_w,
                             primitive_index: triangle.primitive_index as u32,

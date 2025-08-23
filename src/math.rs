@@ -87,7 +87,7 @@ impl Vec3x4 {
         )
     }
 
-    pub fn _cross(&self, other: Vec3x4) -> Vec3x4 {
+    pub fn cross(&self, other: Vec3x4) -> Vec3x4 {
         Vec3x4::new(
             self.y * other.z - self.z * other.y,
             self.z * other.x - self.x * other.z,
@@ -145,6 +145,14 @@ impl Sub for Vec3x4 {
 
     fn sub(self, other: Self) -> Self {
         Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
+    }
+}
+
+impl Sub<f32> for Vec3x4 {
+    type Output = Self;
+
+    fn sub(self, other: f32) -> Self {
+        Self::new(self.x - other, self.y - other, self.z - other)
     }
 }
 

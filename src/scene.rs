@@ -88,6 +88,7 @@ pub struct Mesh {
 pub struct Primitive {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
+    pub tangents: Vec<Vec3>,
     pub texcoords: Vec<Vec2>,
     pub indices: Vec<u32>,
     pub material_index: usize,
@@ -386,6 +387,13 @@ impl Primitive {
             compute_smooth_normals(&positions, &indices)
         };
 
+        let tangents: Vec<Vec3> = if let Some(file_tangents) = reader.read_tangents() {
+            file_tangents.map(|t| Vec3::new(t[0], t[1], t[2])).collect()
+        } else {
+            // Just clone the normals as tangents, without normal mapping it doesn't matter anyway
+            normals.clone()
+        };
+
         let mut texcoords = Vec::new();
         if let Some(file_texcoords) = reader.read_tex_coords(0) {
             texcoords = file_texcoords
@@ -402,6 +410,7 @@ impl Primitive {
         Ok(Primitive {
             positions,
             normals,
+            tangents,
             texcoords,
             indices,
             bounding_sphere,

@@ -304,6 +304,16 @@ impl TileRasterizer {
         )
         .normalize();
 
+        let input_tangent = interpolate_attribute_vec3x4(
+            packet.tangents[0],
+            packet.tangents[1],
+            packet.tangents[2],
+            bary0,
+            bary1,
+            bary2,
+        )
+        .normalize();
+
         let pos_world = interpolate_attribute_vec3x4(
             packet.pos_world_over_w[0],
             packet.pos_world_over_w[1],
@@ -330,8 +340,28 @@ impl TileRasterizer {
             bary2,
         ) * w;
 
+        let mut normal_world = input_normal;
+
+        // Apply normal mapping if we have a normal map
+        if let Some(normal_map) = &material.normal_texture {
+            let normal_map_mat = normal_map.sample4(uv_x, uv_y);
+            let mut tangent_space_normal = (Vec3x4::new(
+                normal_map_mat.col(0),
+                normal_map_mat.col(1),
+                normal_map_mat.col(2),
+            )) * 2.0 - 1.0;
+            // HACK: Reduce normal map strength to hide lack of filtering a bit
+            tangent_space_normal.x *= 0.5;
+            tangent_space_normal.y *= 0.5;
+            tangent_space_normal = tangent_space_normal.normalize();
+            let binormal = input_normal.cross(input_tangent);
+            normal_world = input_tangent * tangent_space_normal.x
+                + binormal * tangent_space_normal.y
+                + input_normal * tangent_space_normal.z;
+        }
+
         // Compute N.L diffuse lighting
-        let n_dot_l = input_normal.dot(light_dir);
+        let n_dot_l = normal_world.dot(light_dir);
         let diffuse = n_dot_l.clamp(Vec4::ZERO, Vec4::ONE);
 
         // Compute the view direction for each pixel
@@ -342,7 +372,7 @@ impl TileRasterizer {
         // Normalize half vector
         let half_vector = half_vector_add.normalize();
         // H.N
-        let n_dot_h = input_normal.dot(half_vector);
+        let n_dot_h = normal_world.dot(half_vector);
         // Exponentiate
         let n_dot_h_2 = n_dot_h * n_dot_h;
         let n_dot_h_4 = n_dot_h_2 * n_dot_h_2;
@@ -351,7 +381,7 @@ impl TileRasterizer {
         let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
         // More ambient light coming from the top, peak intensity of 0.15
-        let ambient = (input_normal.y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
+        let ambient = (normal_world.y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
 
         // Get voxel grid lighting if available, for shadows
         let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
@@ -445,7 +475,7 @@ impl TileRasterizer {
 
         // Sample cubemap (with some totally arbitrary weighting)
         // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
-        let reflect = view_normal.reflect(input_normal);
+        let reflect = view_normal.reflect(normal_world);
         let cubemap_mat = scene
             .cubemap
             .sample_cubemap(-reflect.x, -reflect.y, -reflect.z);
