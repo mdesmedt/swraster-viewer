@@ -351,9 +351,6 @@ impl TileRasterizer {
                 normal_map_mat.col(2),
             )) * 2.0
                 - 1.0;
-            // HACK: Reduce normal map strength to hide lack of filtering a bit
-            tangent_space_normal.x *= 0.5;
-            tangent_space_normal.y *= 0.5;
             tangent_space_normal = tangent_space_normal.normalize();
             let binormal = input_normal.cross(input_tangent);
             normal_world = input_tangent * tangent_space_normal.x
