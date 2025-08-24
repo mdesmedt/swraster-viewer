@@ -7,7 +7,7 @@ use crate::scene::{SceneError, SceneResult};
 pub struct Texture {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>, // RGBA8 data
+    pub data: Vec<Vec4>, // Vec4 floating point data
 }
 
 pub enum WrapMode {
@@ -125,8 +125,8 @@ impl TextureAndSampler {
     }
 
     pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4) -> Mat4 {
-        // Sample four pixels
-        let mut pixels = Mat4::ZERO;
+        // Sample four texels
+        let mut texels = Mat4::ZERO;
         for i in 0..4 {
             // Apply wrap modes to UV coordinates
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
@@ -136,19 +136,13 @@ impl TextureAndSampler {
             let x = (u * (self.texture.width - 1) as f32) as u32;
             let y = (v * (self.texture.height - 1) as f32) as u32;
 
-            // Get pixel index
-            let pixel_index = ((y * self.texture.width + x) * 4) as usize;
-
-            // Read RGBA values and convert to float [0, 1]
-            let r = self.texture.data[pixel_index] as f32 / 255.0;
-            let g = self.texture.data[pixel_index + 1] as f32 / 255.0;
-            let b = self.texture.data[pixel_index + 2] as f32 / 255.0;
-            let a = self.texture.data[pixel_index + 3] as f32 / 255.0;
-
-            *pixels.col_mut(i) = Vec4::new(r, g, b, a);
+            // Point sample the texture
+            let pixel_index = (y * self.texture.width + x) as usize;
+            *texels.col_mut(i) = self.texture.data[pixel_index];
         }
 
-        pixels.transpose()
+        // Return the samples in columns of X, Y, Z and W
+        texels.transpose()
     }
 }
 
@@ -206,7 +200,17 @@ impl TextureCache {
             Ok(img) => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
-                let data = rgba.into_raw();
+                let raw_data = rgba.into_raw();
+                let mut data = Vec::with_capacity((width * height) as usize);
+                for chunk in raw_data.chunks(4) {
+                    if chunk.len() == 4 {
+                        let r = chunk[0] as f32 / 255.0;
+                        let g = chunk[1] as f32 / 255.0;
+                        let b = chunk[2] as f32 / 255.0;
+                        let a = chunk[3] as f32 / 255.0;
+                        data.push(Vec4::new(r, g, b, a));
+                    }
+                }
                 Ok(Texture {
                     width,
                     height,
@@ -224,13 +228,13 @@ impl TextureCache {
         // Create a simple checkerboard pattern as fallback
         let width = 64;
         let height = 64;
-        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        let mut data = Vec::with_capacity((width * height) as usize);
 
         for y in 0..height {
             for x in 0..width {
                 let is_checker = ((x / 8) + (y / 8)) % 2 == 0;
-                let color = if is_checker { 255 } else { 128 };
-                data.extend_from_slice(&[color, color, color, 255]);
+                let color = if is_checker { 1.0 } else { 0.5 };
+                data.push(Vec4::new(color, color, color, 1.0));
             }
         }
 
