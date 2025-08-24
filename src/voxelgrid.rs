@@ -1,5 +1,5 @@
 use crate::math::*;
-use glam::{UVec3, Vec3, Vec4};
+use glam::{USizeVec4, UVec3, Vec3, Vec4};
 use rayon::prelude::*;
 
 /// A 3D voxel grid that stores light intensity values for each voxel
@@ -68,110 +68,85 @@ impl VoxelGrid {
     /// Get the light intensity at the specified voxel coordinates
     pub fn get_light_intensity(&self, x: usize, y: usize, z: usize) -> f32 {
         let index = z * self.width * self.height + y * self.width + x;
-        self.light_intensity[index]
-    }
-
-    /// Get light intensity for 4 world positions, returning a Vec4
-    /// If positions are out of bounds, returns 1.0 for those components
-    pub fn _get_light_intensity_vec(
-        &self,
-        pos_world_x: Vec4,
-        pos_world_y: Vec4,
-        pos_world_z: Vec4,
-    ) -> Vec4 {
-        let mut result = Vec4::ZERO;
-
-        // Convert world position to voxel coordinates (relative to world_min)
-        let local_x = pos_world_x - self.world_min.x;
-        let local_y = pos_world_y - self.world_min.y;
-        let local_z = pos_world_z - self.world_min.z;
-
-        let voxel_size = self.voxel_size();
-        let voxel_x_f = local_x / voxel_size.x;
-        let voxel_y_f = local_y / voxel_size.y;
-        let voxel_z_f = local_z / voxel_size.z;
-
-        let voxel_x_arr = voxel_x_f.to_array();
-        let voxel_y_arr = voxel_y_f.to_array();
-        let voxel_z_arr = voxel_z_f.to_array();
-
-        for i in 0..4 {
-            let voxel_x = voxel_x_arr[i] as usize;
-            let voxel_y = voxel_y_arr[i] as usize;
-            let voxel_z = voxel_z_arr[i] as usize;
-
-            // Check bounds and get intensity
-            if voxel_x < self.width && voxel_y < self.height && voxel_z < self.depth {
-                result[i] = self.get_light_intensity(voxel_x, voxel_y, voxel_z);
-            } else {
-                result[i] = 1.0; // Out of bounds = lit
-            }
-        }
-
-        result
+        self.light_intensity.get(index).copied().unwrap_or(0.0)
     }
 
     /// Get linearly filtered light intensity for 4 world positions
     pub fn get_filtered_light_intensity_vec(&self, pos_world: Vec3x4) -> Vec4 {
         // Convert world positions to voxel coordinates
-        let local_x = pos_world.x - self.world_min.x;
-        let local_y = pos_world.y - self.world_min.y;
-        let local_z = pos_world.z - self.world_min.z;
-
         let voxel_size = self.voxel_size();
-        let voxel_x_f = local_x / voxel_size.x;
-        let voxel_y_f = local_y / voxel_size.y;
-        let voxel_z_f = local_z / voxel_size.z;
+        let voxel_x_f = (pos_world.x - self.world_min.x) / voxel_size.x;
+        let voxel_y_f = (pos_world.y - self.world_min.y) / voxel_size.y;
+        let voxel_z_f = (pos_world.z - self.world_min.z) / voxel_size.z;
 
-        let mut result = Vec4::ZERO;
+        // Floor to get voxel coordinates
+        let x0_f = voxel_x_f.floor();
+        let y0_f = voxel_y_f.floor();
+        let z0_f = voxel_z_f.floor();
 
-        // TODO: Vectorize this better
-        for i in 0..4 {
-            let x = voxel_x_f[i];
-            let y = voxel_y_f[i];
-            let z = voxel_z_f[i];
+        // Convert to usize
+        let x0_usize = USizeVec4::new(
+            x0_f.x as usize,
+            x0_f.y as usize,
+            x0_f.z as usize,
+            x0_f.w as usize,
+        );
+        let y0_usize = USizeVec4::new(
+            y0_f.x as usize,
+            y0_f.y as usize,
+            y0_f.z as usize,
+            y0_f.w as usize,
+        );
+        let z0_usize = USizeVec4::new(
+            z0_f.x as usize,
+            z0_f.y as usize,
+            z0_f.z as usize,
+            z0_f.w as usize,
+        );
 
-            // Get the 8 surrounding voxel coordinates
-            let x0 = x.floor() as usize;
-            let y0 = y.floor() as usize;
-            let z0 = z.floor() as usize;
-            let x1 = (x0 + 1).min(self.width - 1);
-            let y1 = (y0 + 1).min(self.height - 1);
-            let z1 = (z0 + 1).min(self.depth - 1);
+        let x0 = x0_usize.min(USizeVec4::splat(self.width - 1));
+        let y0 = y0_usize.min(USizeVec4::splat(self.height - 1));
+        let z0 = z0_usize.min(USizeVec4::splat(self.depth - 1));
 
-            if x0 < self.width && y0 < self.height && z0 < self.depth {
-                // Compute weights
-                let fx = x - x0 as f32;
-                let fy = y - y0 as f32;
-                let fz = z - z0 as f32;
+        let x1 = (x0 + USizeVec4::ONE).min(USizeVec4::splat(self.width - 1));
+        let y1 = (y0 + USizeVec4::ONE).min(USizeVec4::splat(self.height - 1));
+        let z1 = (z0 + USizeVec4::ONE).min(USizeVec4::splat(self.depth - 1));
 
-                // Get the 8 voxel values
-                let v000 = self.get_light_intensity(x0, y0, z0);
-                let v001 = self.get_light_intensity(x0, y0, z1);
-                let v010 = self.get_light_intensity(x0, y1, z0);
-                let v011 = self.get_light_intensity(x0, y1, z1);
-                let v100 = self.get_light_intensity(x1, y0, z0);
-                let v101 = self.get_light_intensity(x1, y0, z1);
-                let v110 = self.get_light_intensity(x1, y1, z0);
-                let v111 = self.get_light_intensity(x1, y1, z1);
+        // Compute fractional weights
+        let fx = voxel_x_f - x0_f;
+        let fy = voxel_y_f - y0_f;
+        let fz = voxel_z_f - z0_f;
 
-                // Perform trilinear interpolation
-                let v00 = v000 * (1.0 - fx) + v100 * fx;
-                let v01 = v001 * (1.0 - fx) + v101 * fx;
-                let v10 = v010 * (1.0 - fx) + v110 * fx;
-                let v11 = v011 * (1.0 - fx) + v111 * fx;
+        // Helper to gather 8 voxel values
+        let sample_grid = |x: USizeVec4, y: USizeVec4, z: USizeVec4| -> Vec4 {
+            Vec4::new(
+                self.get_light_intensity(x.x, y.x, z.x),
+                self.get_light_intensity(x.y, y.y, z.y),
+                self.get_light_intensity(x.z, y.z, z.z),
+                self.get_light_intensity(x.w, y.w, z.w),
+            )
+        };
 
-                let v0 = v00 * (1.0 - fy) + v10 * fy;
-                let v1 = v01 * (1.0 - fy) + v11 * fy;
+        // Gather 8 surrounding voxels
+        let v000 = sample_grid(x0, y0, z0);
+        let v001 = sample_grid(x0, y0, z1);
+        let v010 = sample_grid(x0, y1, z0);
+        let v011 = sample_grid(x0, y1, z1);
+        let v100 = sample_grid(x1, y0, z0);
+        let v101 = sample_grid(x1, y0, z1);
+        let v110 = sample_grid(x1, y1, z0);
+        let v111 = sample_grid(x1, y1, z1);
 
-                let interpolated = v0 * (1.0 - fz) + v1 * fz;
-                result[i] = interpolated;
-            } else {
-                result[i] = 1.0; // Out of bounds = lit
-            }
-        }
+        // Trilinear interpolation
+        let v00 = v000 * (Vec4::splat(1.0) - fx) + v100 * fx;
+        let v01 = v001 * (Vec4::splat(1.0) - fx) + v101 * fx;
+        let v10 = v010 * (Vec4::splat(1.0) - fx) + v110 * fx;
+        let v11 = v011 * (Vec4::splat(1.0) - fx) + v111 * fx;
 
-        result
+        let v0 = v00 * (Vec4::splat(1.0) - fy) + v10 * fy;
+        let v1 = v01 * (Vec4::splat(1.0) - fy) + v11 * fy;
+
+        v0 * (Vec4::splat(1.0) - fz) + v1 * fz
     }
 
     /// Blur light intensity for a voxel with a 3x3x3 filter
