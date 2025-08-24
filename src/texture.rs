@@ -146,7 +146,7 @@ impl TextureAndSampler {
             // Texel coordinates
             let x_f = u * (self.texture.width - 1) as f32;
             let y_f = v * (self.texture.height - 1) as f32;
-            
+
             // Sample four texels
             let x0 = x_f.floor() as u32;
             let y0 = y_f.floor() as u32;
@@ -156,14 +156,14 @@ impl TextureAndSampler {
             let p10 = self.texture.data[(y0 * self.texture.width + x1) as usize];
             let p01 = self.texture.data[(y1 * self.texture.width + x0) as usize];
             let p11 = self.texture.data[(y1 * self.texture.width + x1) as usize];
-            
+
             // Bilinear filter
             let fx = x_f - x0 as f32;
             let fy = y_f - y0 as f32;
             let lerp_x0 = p00 * (1.0 - fx) + p10 * fx;
             let lerp_x1 = p01 * (1.0 - fx) + p11 * fx;
             let final_color = lerp_x0 * (1.0 - fy) + lerp_x1 * fy;
-            
+
             *texels.col_mut(i) = final_color;
         }
         // Return the samples in columns of X, Y, Z and W

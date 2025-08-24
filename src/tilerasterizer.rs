@@ -18,14 +18,14 @@ pub struct TileRasterizer {
 
 impl TileRasterizer {
     pub fn rasterize_packets(&mut self, scene: &Scene, camera: &RenderCamera) {
-        // Fill the tile with the skybox
-        self.fill_with_skybox(scene, camera);
         // Clear depth
         self.depth.fill(Vec4::splat(f32::INFINITY));
         // Opaque packets
         while let Some(packet) = self.packets_opaque.pop() {
             self.rasterize_packet::<true>(scene, camera, packet);
         }
+        // Fill unwritten pixels with skybox
+        self.fill_with_skybox(scene, camera);
         // Sort translucent packets by z, back to front
         self.packets_translucent
             .sort_by(|a, b| b.avg_z.cmp(&a.avg_z));
@@ -38,6 +38,7 @@ impl TileRasterizer {
         self.packets_translucent.reset();
     }
 
+    /// Fill depth=infinity pixels with skybox color
     pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
         let inv_viewproj = camera.inverse_view_project_matrix;
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
@@ -53,6 +54,12 @@ impl TileRasterizer {
                 let screen_x = self.screen_min.x + (x_vec4 as i32 * 4);
                 let index = self.index_from_xy(screen_x, screen_y);
                 let mut out_colors = UVec4::ZERO;
+
+                let depth = self.depth[index];
+                let depth_mask = depth.cmpeq(Vec4::INFINITY);
+                if !depth_mask.any() {
+                    continue;
+                }
 
                 // Compute one pixel at a time for now
                 // TODO: Optimize with SIMD and with simpler math
@@ -87,7 +94,12 @@ impl TileRasterizer {
                         _ => unreachable!(),
                     }
                 }
-                self.color[index] = out_colors;
+
+                let booleans: [bool; 4] = depth_mask.into();
+                let mask_bvec4 = BVec4::from(booleans);
+                let current_color = self.color[index];
+                let color = UVec4::select(mask_bvec4, out_colors, current_color);
+                self.color[index] = color;
             }
         }
     }
