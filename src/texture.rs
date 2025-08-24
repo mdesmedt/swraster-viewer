@@ -120,8 +120,19 @@ impl TextureAndSampler {
             v_out[i] = v_final;
         }
 
-        // Call the existing sample4 function
-        self.sample4(u_out, v_out)
+        // Sample four texels
+        let mut texels = Mat4::ZERO;
+        for i in 0..4 {
+            // Convert to pixel coordinates
+            let x = (u_out[i] * (self.texture.width - 1) as f32) as u32;
+            let y = (v_out[i] * (self.texture.height - 1) as f32) as u32;
+
+            // Point sample the texture
+            let pixel_index = (y * self.texture.width + x) as usize;
+            *texels.col_mut(i) = self.texture.data[pixel_index];
+        }
+        // Return the samples in columns of X, Y, Z and W
+        texels.transpose()
     }
 
     pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4) -> Mat4 {
@@ -140,7 +151,6 @@ impl TextureAndSampler {
             let pixel_index = (y * self.texture.width + x) as usize;
             *texels.col_mut(i) = self.texture.data[pixel_index];
         }
-
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
     }
