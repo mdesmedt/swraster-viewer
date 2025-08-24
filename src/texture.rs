@@ -123,13 +123,7 @@ impl TextureAndSampler {
         // Sample four texels
         let mut texels = Mat4::ZERO;
         for i in 0..4 {
-            // Convert to pixel coordinates
-            let x = (u_out[i] * (self.texture.width - 1) as f32) as u32;
-            let y = (v_out[i] * (self.texture.height - 1) as f32) as u32;
-
-            // Point sample the texture
-            let pixel_index = (y * self.texture.width + x) as usize;
-            *texels.col_mut(i) = self.texture.data[pixel_index];
+            *texels.col_mut(i) = self.sample_point(u_out[i], v_out[i]);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
@@ -143,31 +137,46 @@ impl TextureAndSampler {
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
             let v = Self::apply_wrap_mode(v_vec[i], &self.sampler.wrap_t);
 
-            // Texel coordinates
-            let x_f = u * (self.texture.width - 1) as f32;
-            let y_f = v * (self.texture.height - 1) as f32;
-
-            // Sample four texels
-            let x0 = x_f.floor() as u32;
-            let y0 = y_f.floor() as u32;
-            let x1 = (x0 + 1).min(self.texture.width - 1);
-            let y1 = (y0 + 1).min(self.texture.height - 1);
-            let p00 = self.texture.data[(y0 * self.texture.width + x0) as usize];
-            let p10 = self.texture.data[(y0 * self.texture.width + x1) as usize];
-            let p01 = self.texture.data[(y1 * self.texture.width + x0) as usize];
-            let p11 = self.texture.data[(y1 * self.texture.width + x1) as usize];
-
-            // Bilinear filter
-            let fx = x_f - x0 as f32;
-            let fy = y_f - y0 as f32;
-            let lerp_x0 = p00 * (1.0 - fx) + p10 * fx;
-            let lerp_x1 = p01 * (1.0 - fx) + p11 * fx;
-            let final_color = lerp_x0 * (1.0 - fy) + lerp_x1 * fy;
-
-            *texels.col_mut(i) = final_color;
+            *texels.col_mut(i) = self.sample_point(u, v);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
+    }
+
+    pub fn sample_point(&self, u: f32, v: f32) -> Vec4 {
+        // Texel coordinates
+        let x_f = u * (self.texture.width - 1) as f32;
+        let y_f = v * (self.texture.height - 1) as f32;
+
+        let x = x_f as u32;
+        let y = y_f as u32;
+
+        self.texture.data[(y * self.texture.width + x) as usize]
+    }
+
+    pub fn _sample_bilinear(&self, u: f32, v: f32) -> Vec4 {
+        // Texel coordinates
+        let x_f = u * (self.texture.width - 1) as f32;
+        let y_f = v * (self.texture.height - 1) as f32;
+
+        // Sample four texels
+        let x0 = x_f.floor() as u32;
+        let y0 = y_f.floor() as u32;
+        let x1 = (x0 + 1).min(self.texture.width - 1);
+        let y1 = (y0 + 1).min(self.texture.height - 1);
+        let p00 = self.texture.data[(y0 * self.texture.width + x0) as usize];
+        let p10 = self.texture.data[(y0 * self.texture.width + x1) as usize];
+        let p01 = self.texture.data[(y1 * self.texture.width + x0) as usize];
+        let p11 = self.texture.data[(y1 * self.texture.width + x1) as usize];
+
+        // Bilinear filter
+        let fx = x_f - x0 as f32;
+        let fy = y_f - y0 as f32;
+        let lerp_x0 = p00 * (1.0 - fx) + p10 * fx;
+        let lerp_x1 = p01 * (1.0 - fx) + p11 * fx;
+        let final_color = lerp_x0 * (1.0 - fy) + lerp_x1 * fy;
+
+        final_color
     }
 }
 
