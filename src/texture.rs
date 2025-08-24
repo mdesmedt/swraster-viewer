@@ -1,3 +1,4 @@
+use crate::math::*;
 use glam::{Mat4, Vec4};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,73 +58,82 @@ impl TextureAndSampler {
         }
     }
 
-    pub fn sample_cubemap(&self, normal_x: Vec4, normal_y: Vec4, normal_z: Vec4) -> Mat4 {
-        let mut u_out = Vec4::ZERO;
-        let mut v_out = Vec4::ZERO;
+    /// Convert normals into cubemap UVs
+    /// Cubemap layout:
+    ///     +Y
+    /// -X  +Z  +X  -Z
+    ///     -Y
+    pub fn cubemap_uv_from_normal(n: Vec3x4) -> (Vec4, Vec4) {
+        let ax = n.x.abs();
+        let ay = n.y.abs();
+        let az = n.z.abs();
 
-        for i in 0..4 {
-            let x = normal_x[i];
-            let y = normal_y[i];
-            let z = normal_z[i];
+        // Major-axis masks
+        let mx = ax.cmpge(ay) & ax.cmpge(az); // X dominant
+        let my = ay.cmpgt(ax) & ay.cmpge(az); // Y dominant
 
-            let ax = x.abs();
-            let ay = y.abs();
-            let az = z.abs();
+        // Signs as +1 / -1
+        let sx = Vec4::select(n.x.cmpge(Vec4::ZERO), Vec4::ONE, Vec4::NEG_ONE);
+        let sy = Vec4::select(n.y.cmpge(Vec4::ZERO), Vec4::ONE, Vec4::NEG_ONE);
+        let sz = Vec4::select(n.z.cmpge(Vec4::ZERO), Vec4::ONE, Vec4::NEG_ONE);
 
-            // dominant axis → pick face
-            let (face, sc, tc, ma) = if ax >= ay && ax >= az {
-                if x > 0.0 {
-                    // +X
-                    (0u32, -z, -y, ax)
-                } else {
-                    // -X
-                    (1u32, z, -y, ax)
-                }
-            } else if ay >= ax && ay >= az {
-                if y > 0.0 {
-                    // +Y
-                    (2u32, x, z, ay)
-                } else {
-                    // -Y
-                    (3u32, x, -z, ay)
-                }
-            } else {
-                if z > 0.0 {
-                    // +Z
-                    (4u32, x, -y, az)
-                } else {
-                    // -Z
-                    (5u32, -x, -y, az)
-                }
-            };
+        // Per-axis candidate (u,v) and denominator
+        // X faces:  den=ax, u=-z*sx, v=-y
+        let u_x = -n.z * sx;
+        let v_x = -n.y;
+        let d_x = ax;
 
-            // [-1,1] → [0,1]
-            let u = 0.5 * (sc / ma + 1.0);
-            let v = 0.5 * (tc / ma + 1.0);
+        // Y faces:  den=ay, u= x,    v= z*sy
+        let u_y = n.x;
+        let v_y = n.z * sy;
+        let d_y = ay;
 
-            // face placement in atlas (col,row)
-            let (col, row) = match face {
-                0 => (2, 1), // +X
-                1 => (0, 1), // -X
-                2 => (1, 0), // +Y
-                3 => (1, 2), // -Y
-                4 => (1, 1), // +Z
-                5 => (3, 1), // -Z
-                _ => unreachable!(),
-            };
+        // Z faces:  den=az, u= x*sz, v=-y
+        let u_z = n.x * sz;
+        let v_z = -n.y;
+        let d_z = az;
 
-            // atlas is 4 faces wide × 3 faces tall
-            let u_final = (u + col as f32) / 4.0;
-            let v_final = (v + row as f32) / 3.0;
+        // Select the axis
+        let u = Vec4::select(mx, u_x, Vec4::select(my, u_y, u_z));
+        let v = Vec4::select(mx, v_x, Vec4::select(my, v_y, v_z));
+        let mut denom = Vec4::select(mx, d_x, Vec4::select(my, d_y, d_z));
 
-            u_out[i] = u_final;
-            v_out[i] = v_final;
-        }
+        // Safety against divide-by-zero on degenerate inputs
+        denom = denom.max(Vec4::splat(1.0e-19));
+
+        // Face-local UV in [-1,1] -> [0,1]
+        let uf = 0.5 * (u / denom + 1.0);
+        let vf = 0.5 * (v / denom + 1.0);
+
+        // Face coordinates for cross layout
+        // +X → (2,1), -X → (0,1), +Y → (1,0), -Y → (1,2), +Z → (1,1), -Z → (3,1)
+        let fx_x = Vec4::select(n.x.cmpge(Vec4::ZERO), Vec4::splat(2.0), Vec4::splat(0.0));
+        let fy_x = Vec4::splat(1.0);
+
+        let fx_y = Vec4::splat(1.0);
+        let fy_y = Vec4::select(n.y.cmpge(Vec4::ZERO), Vec4::splat(0.0), Vec4::splat(2.0));
+
+        let fx_z = Vec4::select(n.z.cmpge(Vec4::ZERO), Vec4::splat(1.0), Vec4::splat(3.0));
+        let fy_z = Vec4::splat(1.0);
+
+        let fx = Vec4::select(mx, fx_x, Vec4::select(my, fx_y, fx_z));
+        let fy = Vec4::select(mx, fy_x, Vec4::select(my, fy_y, fy_z));
+
+        // Transform face + face-local UV to final UV
+        let u_out = (fx + uf) * (1.0 / 4.0);
+        let v_out = (fy + vf) * (1.0 / 3.0);
+
+        (u_out, v_out)
+    }
+
+    pub fn sample_cubemap(&self, normal: Vec3x4) -> Mat4 {
+        // Compute UVs
+        let (u, v) = Self::cubemap_uv_from_normal(normal);
 
         // Sample four texels
         let mut texels = Mat4::ZERO;
         for i in 0..4 {
-            *texels.col_mut(i) = self.sample_point(u_out[i], v_out[i]);
+            *texels.col_mut(i) = self.sample_point(u[i], v[i]);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()

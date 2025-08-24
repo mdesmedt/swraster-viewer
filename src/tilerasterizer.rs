@@ -73,11 +73,7 @@ impl TileRasterizer {
                     let world_dir = (inv_viewproj * clip_pos).truncate().normalize();
 
                     // Sample the cubemap
-                    let cubemap_color = scene.cubemap.sample_cubemap(
-                        Vec4::splat(world_dir.x),
-                        Vec4::splat(world_dir.y),
-                        Vec4::splat(world_dir.z),
-                    );
+                    let cubemap_color = scene.cubemap.sample_cubemap(Vec3x4::from_vec3(world_dir));
 
                     let r = cubemap_color.col(0).x;
                     let g = cubemap_color.col(1).x;
@@ -486,9 +482,7 @@ impl TileRasterizer {
         // Sample cubemap (with some totally arbitrary weighting)
         // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
         let reflect = view_normal.reflect(normal_world);
-        let cubemap_mat = scene
-            .cubemap
-            .sample_cubemap(-reflect.x, -reflect.y, -reflect.z);
+        let cubemap_mat = scene.cubemap.sample_cubemap(reflect * -1.0);
         let dielectric_strength =
             ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
         let metallic_strength = metallic * shininess;
