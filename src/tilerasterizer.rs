@@ -5,6 +5,56 @@ use crate::renderer::RasterPacket;
 use crate::scene::{Material, Scene};
 use glam::{BVec4, BVec4A, IVec2, UVec4, Vec3, Vec4};
 
+// Helper functions for attribute interpolation
+
+fn interpolate_attribute(
+    a: f32,
+    b: f32,
+    c: f32,
+    bary0: Vec4,
+    bary1: Vec4,
+    bary2: Vec4,
+) -> Vec4 {
+    a * bary0 + b * bary1 + c * bary2
+}
+
+fn interpolate_attribute_vec3x4(
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    bary0: Vec4,
+    bary1: Vec4,
+    bary2: Vec4,
+) -> Vec3x4 {
+    let x = interpolate_attribute(a.x, b.x, c.x, bary0, bary1, bary2);
+    let y = interpolate_attribute(a.y, b.y, c.y, bary0, bary1, bary2);
+    let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
+    Vec3x4::new(x, y, z)
+}
+
+fn bvec4_to_bvec4a(b: BVec4) -> BVec4A {
+    let arr: [bool; 4] = b.into();
+    BVec4A::from(arr)
+}
+
+fn bvec4a_to_bvec4(b: BVec4A) -> BVec4 {
+    let arr: [bool; 4] = b.into();
+    BVec4::from(arr)
+}
+
+struct ShadingParams<'a> {
+    p: IVec2,
+    bary0: Vec4,
+    bary1: Vec4,
+    bary2: Vec4,
+    mask: BVec4A,
+    light_dir: Vec3x4,
+    packet: &'a RasterPacket,
+    material: &'a Material,
+    camera: &'a RenderCamera,
+    scene: &'a Scene,
+}
+
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
 pub struct TileRasterizer {
@@ -14,25 +64,37 @@ pub struct TileRasterizer {
     pub packets_translucent: BumpQueue<RasterPacket>,
     pub color: Vec<UVec4>,
     pub depth: Vec<Vec4>,
+    // Internal "visibility-buffer"
+    pub packet_index: Vec<UVec4>,
+    pub bary0: Vec<Vec4>,
+    pub bary1: Vec<Vec4>,
 }
 
 impl TileRasterizer {
-    pub fn rasterize_packets(&mut self, scene: &Scene, camera: &RenderCamera) {
+    pub fn render_tile(&mut self, scene: &Scene, camera: &RenderCamera) {
         // Clear depth
         self.depth.fill(Vec4::splat(f32::INFINITY));
-        // Opaque packets
-        while let Some(packet) = self.packets_opaque.pop() {
-            self.rasterize_packet::<true>(scene, camera, packet);
+
+        // Render opaque packets
+        for packet_index in 0..self.packets_opaque.len() {
+            self.rasterize_packet::<false>(scene, camera, packet_index);
         }
+
+        // Shade opaque pixels
+        self.shade_opaque_pixels(scene, camera);
+
         // Fill unwritten pixels with skybox
         self.fill_with_skybox(scene, camera);
+
         // Sort translucent packets by z, back to front
         self.packets_translucent
             .sort_by(|a, b| b.avg_z.cmp(&a.avg_z));
-        // Translucent packets first get collected and then rendered
-        while let Some(packet) = self.packets_translucent.pop() {
-            self.rasterize_packet::<false>(scene, camera, packet);
+
+        // Render translucent packets
+        for packet_index in 0..self.packets_translucent.len() {
+            self.rasterize_packet::<true>(scene, camera, packet_index);
         }
+
         // Reset the queues
         self.packets_opaque.reset();
         self.packets_translucent.reset();
@@ -105,12 +167,21 @@ impl TileRasterizer {
     }
 
     // Main rasterizer code
-    fn rasterize_packet<const MODE_OPAQUE: bool>(
+    fn rasterize_packet<const FORWARD_SHADING: bool>(
         &mut self,
         scene: &Scene,
         camera: &RenderCamera,
-        packet: RasterPacket,
+        packet_index: usize,
     ) {
+        let packet = if FORWARD_SHADING {
+            debug_assert!(packet_index < self.packets_translucent.len());
+            self.packets_translucent.get(packet_index)
+        } else {
+            debug_assert!(packet_index < self.packets_opaque.len());
+            self.packets_opaque.get(packet_index)
+        };
+        let packet_index_vec = UVec4::splat(packet_index as u32);
+
         let x_start = packet.screen_min.x & !1; // Align to quads
         let y_start = packet.screen_min.y & !1;
         let mut p = IVec2::new(x_start, y_start);
@@ -197,23 +268,67 @@ impl TileRasterizer {
                 // Test if any pixels are inside the triangle
                 let mask = w0.cmpge(Vec4::ZERO) & w1.cmpge(Vec4::ZERO) & w2.cmpge(Vec4::ZERO);
                 if mask.any() {
-                    // Convert unaligned mask to aligned mask
-                    // TODO: Figure out why glam needs two BVec4 types
-                    let booleans: [bool; 4] = mask.into();
-                    let mask_aligned = BVec4A::from(booleans);
-                    self.shade_pixels::<MODE_OPAQUE>(
+                    // Compute the barycentrics
+                    let bary0: Vec4 = w0 * one_over_area_vec;
+                    let bary1: Vec4 = w1 * one_over_area_vec;
+                    let bary2: Vec4 = w2 * one_over_area_vec;
+
+                    // Interpolate w and z
+                    let w = 1.0
+                    / interpolate_attribute(
+                        packet.one_over_w[0],
+                        packet.one_over_w[1],
+                        packet.one_over_w[2],
+                        bary0,
+                        bary1,
+                        bary2,
+                    );
+        
+                    let z = interpolate_attribute(
+                        packet.z_over_w[0],
+                        packet.z_over_w[1],
+                        packet.z_over_w[2],
+                        bary0,
+                        bary1,
+                        bary2,
+                    ) * w;
+
+                    // Perform depth test
+                    let (out_depth, mut out_mask) = self.depth_test(p.x, p.y, z, mask);
+
+                    let shading_params = ShadingParams {
                         p,
-                        w0,
-                        w1,
-                        w2,
-                        mask_aligned,
+                        bary0,
+                        bary1,
+                        bary2,
+                        mask: out_mask,
                         light_dir,
-                        one_over_area_vec,
-                        &packet,
+                        packet: &packet,
                         material,
                         camera,
                         scene,
-                    );
+                    };
+                    
+                    if FORWARD_SHADING {
+                        // Forward shade translucent pixels
+                        self.shade_pixels::<true>(shading_params);
+                    }
+                    else {
+                        // Store "visibility" buffer for opaque pixels
+                        if out_mask.any() {
+                            if material.is_alpha_tested {
+                                let alpha_test_mask = self.get_alpha_test_mask(shading_params, w);
+                                out_mask &= alpha_test_mask;
+                            }
+                            // Store depth, packet index and barycentrics
+                            let index = self.index_from_xy(p.x, p.y);
+                            let mask_bvec4 = bvec4a_to_bvec4(out_mask);
+                            self.packet_index[index] = UVec4::select(mask_bvec4, packet_index_vec, self.packet_index[index]);
+                            self.bary0[index] = Vec4::select(out_mask, bary0, self.bary0[index]);
+                            self.bary1[index] = Vec4::select(out_mask, bary1, self.bary1[index]);
+                            self.depth[index] = Vec4::select(out_mask, out_depth, self.depth[index]);
+                        }
+                    }
                 }
 
                 // Step in X
@@ -231,53 +346,132 @@ impl TileRasterizer {
         }
     }
 
+    fn shade_opaque_pixels(&mut self, scene: &Scene, camera: &RenderCamera) {
+        let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
+        let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
+        let width_quads = tile_width / 2;
+        
+        // Loop over rows of quads
+        for y in 0..tile_height / 2 {
+            let screen_y = self.screen_min.y + (y as i32) * 2;
+
+            // Loop over Vec4s in the row
+            for quad_x in 0..width_quads {
+                let screen_x = self.screen_min.x + (quad_x as i32 * 2);
+                let index = self.index_from_xy(screen_x, screen_y);
+
+                let packet_index_vec = self.packet_index[index];
+
+                let depth = self.depth[index];
+                let depth_mask = depth.cmpne(Vec4::INFINITY);
+
+                // TODO: On depth=INF pixels just compute the skybox here
+
+                // Consume all possible packets in packet_index uniformly
+                let mut remaining = depth_mask;
+                while remaining.any() {
+                    // Find the first active lane (smallest i where remaining[i] == true)
+                    let lane = remaining.bitmask().trailing_zeros() as usize;
+
+                    // Extract that lane's value
+                    let packet_index = packet_index_vec[lane];
+
+                    // Build mask for all lanes equal to this value
+                    let mask = bvec4_to_bvec4a(packet_index_vec.cmpeq(UVec4::splat(packet_index)));
+
+                    let bary0 = self.bary0[index];
+                    let bary1 = self.bary1[index];
+                    let bary2 = Vec4::ONE - bary0 - bary1;
+                    let packet = self.packets_opaque.get(packet_index as usize);
+
+                    // Fetch the material
+                    let mesh_index = packet.mesh_index as usize;
+                    let primitive_index = packet.primitive_index as usize;
+                    let mesh = &scene.meshes[mesh_index];
+                    let material_index = mesh.primitives[primitive_index].material_index;
+                    let material = &scene.materials[material_index];
+    
+                    let p = IVec2::new(screen_x, screen_y);
+                    let light_dir = Vec3x4::new(
+                        Vec4::splat(scene.light.direction.x),
+                        Vec4::splat(scene.light.direction.y),
+                        Vec4::splat(scene.light.direction.z),
+                    );
+                    let packet = &packet;
+    
+                    let shading_params = ShadingParams {
+                        p,
+                        bary0,
+                        bary1,
+                        bary2,
+                        mask,
+                        light_dir,
+                        packet: &packet,
+                        material,
+                        camera,
+                        scene,
+                    };
+    
+                    self.shade_pixels::<false>(shading_params);
+
+                    // Clear out the lanes we just handled
+                    remaining &= !mask;
+                }
+            }
+        }
+    }
+
+    fn get_alpha_test_mask(&self, shading_params: ShadingParams, w: Vec4) -> BVec4A {
+        let bary0 = shading_params.bary0;
+        let bary1 = shading_params.bary1;
+        let bary2 = shading_params.bary2;
+        let packet = shading_params.packet;
+        let material = shading_params.material;
+        let mask = shading_params.mask;
+        
+        let uv_x = interpolate_attribute(
+            packet.uv_over_w[0].x,
+            packet.uv_over_w[1].x,
+            packet.uv_over_w[2].x,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+        let uv_y = interpolate_attribute(
+            packet.uv_over_w[0].y,
+            packet.uv_over_w[1].y,
+            packet.uv_over_w[2].y,
+            bary0,
+            bary1,
+            bary2,
+        ) * w;
+
+        let mut out_mask = mask;
+        if let Some(diffuse_texture) = &material.base_color_texture {
+            let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
+            let alpha = diffuse_mat.col(3);
+            out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
+        }
+
+        out_mask
+    }
+
     // "Pixel shader" for the rasterizer. Shades 4 pixels simultaneously.
     #[inline]
-    fn shade_pixels<const MODE_OPAQUE: bool>(
+    fn shade_pixels<const FORWARD_SHADING: bool>(
         &mut self,
-        p: IVec2,
-        w0: Vec4,
-        w1: Vec4,
-        w2: Vec4,
-        mask: BVec4A,
-        light_dir: Vec3x4,
-        one_over_area_vec: Vec4,
-        packet: &RasterPacket,
-        material: &Material,
-        camera: &RenderCamera,
-        scene: &Scene,
+        shading_params: ShadingParams,
     ) {
-        // Compute the barycentrics
-        let bary0: Vec4 = w0 * one_over_area_vec;
-        let bary1: Vec4 = w1 * one_over_area_vec;
-        let bary2: Vec4 = w2 * one_over_area_vec;
-
-        // Helper functions for attribute interpolation
-
-        fn interpolate_attribute(
-            a: f32,
-            b: f32,
-            c: f32,
-            bary0: Vec4,
-            bary1: Vec4,
-            bary2: Vec4,
-        ) -> Vec4 {
-            a * bary0 + b * bary1 + c * bary2
-        }
-
-        fn interpolate_attribute_vec3x4(
-            a: Vec3,
-            b: Vec3,
-            c: Vec3,
-            bary0: Vec4,
-            bary1: Vec4,
-            bary2: Vec4,
-        ) -> Vec3x4 {
-            let x = interpolate_attribute(a.x, b.x, c.x, bary0, bary1, bary2);
-            let y = interpolate_attribute(a.y, b.y, c.y, bary0, bary1, bary2);
-            let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
-            Vec3x4::new(x, y, z)
-        }
+        let p = shading_params.p;
+        let bary0 = shading_params.bary0;
+        let bary1 = shading_params.bary1;
+        let bary2 = shading_params.bary2;
+        let mask = shading_params.mask;
+        let light_dir = shading_params.light_dir;
+        let packet = shading_params.packet;
+        let material = shading_params.material;
+        let camera = shading_params.camera;
+        let scene = shading_params.scene;
 
         // Begin attribute interpolation
 
@@ -290,26 +484,6 @@ impl TileRasterizer {
                 bary1,
                 bary2,
             );
-
-        let z = interpolate_attribute(
-            packet.z_over_w[0],
-            packet.z_over_w[1],
-            packet.z_over_w[2],
-            bary0,
-            bary1,
-            bary2,
-        ) * w;
-
-        let mut out_depth = Vec4::splat(f32::INFINITY);
-        let mut out_mask = mask;
-
-        // Early Z test when not alpha testing
-        if !material.is_alpha_tested {
-            (out_depth, out_mask) = self.depth_test(p.x, p.y, z, mask);
-            if !out_mask.any() {
-                return;
-            }
-        }
 
         let input_normal = interpolate_attribute_vec3x4(
             packet.normals[0],
@@ -402,7 +576,7 @@ impl TileRasterizer {
         let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
             voxel_grid.get_filtered_light_intensity_vec(pos_world)
         } else {
-            Vec4::splat(1.0)
+            Vec4::ONE
         };
 
         let light_intensity = diffuse * voxel_light_intensity + ambient;
@@ -414,6 +588,8 @@ impl TileRasterizer {
             material.base_color_factor.z,
         );
 
+        let mut out_mask = mask;
+
         // If we have a base texture, sample it
         if let Some(diffuse_texture) = &material.base_color_texture {
             let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
@@ -422,12 +598,6 @@ impl TileRasterizer {
             if material.is_alpha_tested {
                 let alpha = diffuse_mat.col(3);
                 out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
-
-                // Now do late Z
-                (out_depth, out_mask) = self.depth_test(p.x, p.y, z, out_mask);
-                if !out_mask.any() {
-                    return;
-                }
             }
 
             // Multiply diffuse color
@@ -446,10 +616,10 @@ impl TileRasterizer {
             roughness *= metallic_roughness_mat.col(1);
             metallic *= metallic_roughness_mat.col(2);
         }
-        let dielectric = Vec4::splat(1.0) - metallic;
+        let dielectric = Vec4::ONE - metallic;
 
         // Compute specular
-        let shininess = Vec4::splat(1.0) - roughness;
+        let shininess = Vec4::ONE - roughness;
         let specular_shiny = n_dot_h_32;
         let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
         let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
@@ -460,7 +630,7 @@ impl TileRasterizer {
         let mut color = Vec3x4::from_vec4(light_intensity);
 
         // For translucent materials, blend in the current framebuffer color
-        if !MODE_OPAQUE {
+        if FORWARD_SHADING {
             let mut transmission = Vec4::splat(material.transmission);
 
             // Sample transmission texture if provided
@@ -525,12 +695,7 @@ impl TileRasterizer {
         color = color.clamp(Vec4::ZERO, Vec4::ONE);
 
         let packed_colors = pack_colors(color);
-
-        if MODE_OPAQUE {
-            self.write_pixels_opaque(p.x, p.y, packed_colors, out_depth, out_mask);
-        } else {
-            self.write_pixels_translucent(p.x, p.y, packed_colors, out_mask);
-        }
+        self.write_pixels(p.x, p.y, packed_colors, out_mask);
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
@@ -551,12 +716,11 @@ impl TileRasterizer {
 
     // Perform depth test and write color and depth
     #[inline]
-    fn write_pixels_opaque(
+    fn write_pixels(
         &mut self,
         x: i32,
         y: i32,
         color: UVec4,
-        final_depth: Vec4,
         final_mask: BVec4A,
     ) {
         let index = self.index_from_xy(x, y);
@@ -565,21 +729,6 @@ impl TileRasterizer {
 
         // Select final color
         let current_color = self.color[index];
-        let final_color = UVec4::select(mask_bvec4, color, current_color);
-
-        // Write color and depth
-        self.color[index] = final_color;
-        self.depth[index] = final_depth;
-    }
-
-    fn write_pixels_translucent(&mut self, x: i32, y: i32, color: UVec4, final_mask: BVec4A) {
-        let index = self.index_from_xy(x, y);
-        let booleans: [bool; 4] = final_mask.into();
-        let mask_bvec4 = BVec4::from(booleans);
-
-        let current_color = self.color[index];
-
-        // Select final color
         let final_color = UVec4::select(mask_bvec4, color, current_color);
 
         // Write color and depth

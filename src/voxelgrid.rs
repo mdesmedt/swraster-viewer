@@ -138,15 +138,15 @@ impl VoxelGrid {
         let v111 = sample_grid(x1, y1, z1);
 
         // Trilinear interpolation
-        let v00 = v000 * (Vec4::splat(1.0) - fx) + v100 * fx;
-        let v01 = v001 * (Vec4::splat(1.0) - fx) + v101 * fx;
-        let v10 = v010 * (Vec4::splat(1.0) - fx) + v110 * fx;
-        let v11 = v011 * (Vec4::splat(1.0) - fx) + v111 * fx;
+        let v00 = v000 * (Vec4::ONE - fx) + v100 * fx;
+        let v01 = v001 * (Vec4::ONE - fx) + v101 * fx;
+        let v10 = v010 * (Vec4::ONE - fx) + v110 * fx;
+        let v11 = v011 * (Vec4::ONE - fx) + v111 * fx;
 
-        let v0 = v00 * (Vec4::splat(1.0) - fy) + v10 * fy;
-        let v1 = v01 * (Vec4::splat(1.0) - fy) + v11 * fy;
+        let v0 = v00 * (Vec4::ONE - fy) + v10 * fy;
+        let v1 = v01 * (Vec4::ONE - fy) + v11 * fy;
 
-        v0 * (Vec4::splat(1.0) - fz) + v1 * fz
+        v0 * (Vec4::ONE - fz) + v1 * fz
     }
 
     /// Blur light intensity for a voxel with a 3x3x3 filter
