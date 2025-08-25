@@ -1,4 +1,4 @@
-use glam::{Vec3, Vec4};
+use glam::{Mat4, Vec3, Vec4};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[cfg(target_arch = "aarch64")]
@@ -105,6 +105,22 @@ impl Vec3x4 {
             self.y.clamp(min, max),
             self.z.clamp(min, max),
         )
+    }
+
+    pub fn transform_direction_transposed(mat_transposed: Mat4, v: Vec3x4) -> Vec3x4 {
+        let row0 = mat_transposed.col(0);
+        let row1 = mat_transposed.col(1);
+        let row2 = mat_transposed.col(2);
+
+        let out_x = v.x * row0.x + v.y * row0.y + v.z * row0.z + row0.w;
+        let out_y = v.x * row1.x + v.y * row1.y + v.z * row1.z + row1.w;
+        let out_z = v.x * row2.x + v.y * row2.y + v.z * row2.z + row2.w;
+
+        Vec3x4 {
+            x: out_x,
+            y: out_y,
+            z: out_z,
+        }
     }
 }
 

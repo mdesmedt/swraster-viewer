@@ -40,10 +40,15 @@ impl TileRasterizer {
 
     /// Fill depth=infinity pixels with skybox color
     pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
-        let inv_viewproj = camera.inverse_view_project_matrix;
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
         let width_vec4 = (tile_width + 3) / 4; // SIMD alignment
+
+        let inv_viewproj = camera.inverse_view_project_matrix;
+        let inv_viewproj_transposed = inv_viewproj.transpose();
+
+        let rcp_camera_width = Vec4::splat(1.0 / camera.width as f32);
+        let rcp_camera_height = Vec4::splat(1.0 / camera.height as f32);
 
         // Loop over rows
         for y in 0..tile_height {
@@ -53,7 +58,6 @@ impl TileRasterizer {
             for x_vec4 in 0..width_vec4 {
                 let screen_x = self.screen_min.x + (x_vec4 as i32 * 4);
                 let index = self.index_from_xy(screen_x, screen_y);
-                let mut out_colors = UVec4::ZERO;
 
                 let depth = self.depth[index];
                 let depth_mask = depth.cmpeq(Vec4::INFINITY);
@@ -61,36 +65,31 @@ impl TileRasterizer {
                     continue;
                 }
 
-                // Compute one pixel at a time for now
-                // TODO: Optimize with SIMD and with simpler math
-                for i in 0..4 {
-                    let pixel_x = screen_x + i as i32;
+                let pixel_x = Vec4::new(
+                    (screen_x + 0) as f32 + 0.5,
+                    (screen_x + 1) as f32 + 0.5,
+                    (screen_x + 2) as f32 + 0.5,
+                    (screen_x + 3) as f32 + 0.5,
+                );
+                let pixel_y = Vec4::splat(screen_y as f32 + 0.5);
 
-                    let ndc_x = (pixel_x as f32 + 0.5) / camera.width as f32 * 2.0 - 1.0;
-                    let ndc_y = (1.0 - (screen_y as f32 + 0.5) / camera.height as f32) * 2.0 - 1.0;
+                let ndc_x = pixel_x * rcp_camera_width * 2.0 - Vec4::ONE;
+                let ndc_y = (Vec4::ONE - pixel_y  * rcp_camera_height) * 2.0 - Vec4::ONE;
 
-                    let clip_pos = Vec4::new(ndc_x, ndc_y, 1.0, 1.0); // Use +1.0 for far plane
-                    let world_dir = (inv_viewproj * clip_pos).truncate().normalize();
+                let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
 
-                    // Sample the cubemap
-                    let cubemap_color = scene.cubemap.sample_cubemap(Vec3x4::from_vec3(world_dir));
+                // Transform by the transposed inverse view-projection matrix
+                let world_dir = Vec3x4::transform_direction_transposed(inv_viewproj_transposed, clip_pos);
+                let world_normal = world_dir.normalize();
 
-                    let r = cubemap_color.col(0).x;
-                    let g = cubemap_color.col(1).x;
-                    let b = cubemap_color.col(2).x;
+                // Sample the cubemap
+                let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
+                let cubemap_color = Vec3x4::new(cubemap_sample.col(0), cubemap_sample.col(1), cubemap_sample.col(2));
+                
+                // Pack color
+                let out_colors = pack_colors(cubemap_color);
 
-                    // Pack color
-                    let packed_color =
-                        ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32;
-                    match i {
-                        0 => out_colors.x = packed_color,
-                        1 => out_colors.y = packed_color,
-                        2 => out_colors.z = packed_color,
-                        3 => out_colors.w = packed_color,
-                        _ => unreachable!(),
-                    }
-                }
-
+                // Use depth test to selectively write color
                 let booleans: [bool; 4] = depth_mask.into();
                 let mask_bvec4 = BVec4::from(booleans);
                 let current_color = self.color[index];
