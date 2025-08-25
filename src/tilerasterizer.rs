@@ -42,7 +42,7 @@ impl TileRasterizer {
     pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
-        let width_vec4 = (tile_width + 3) / 4; // SIMD alignment
+        let width_quads = tile_width / 2;
 
         let inv_viewproj = camera.inverse_view_project_matrix;
         let inv_viewproj_transposed = inv_viewproj.transpose();
@@ -50,13 +50,13 @@ impl TileRasterizer {
         let rcp_camera_width = Vec4::splat(1.0 / camera.width as f32);
         let rcp_camera_height = Vec4::splat(1.0 / camera.height as f32);
 
-        // Loop over rows
-        for y in 0..tile_height {
-            let screen_y = self.screen_min.y + y as i32;
+        // Loop over rows of quads
+        for y in 0..tile_height / 2 {
+            let screen_y = self.screen_min.y + (y as i32) * 2;
 
             // Loop over Vec4s in the row
-            for x_vec4 in 0..width_vec4 {
-                let screen_x = self.screen_min.x + (x_vec4 as i32 * 4);
+            for quad_x in 0..width_quads {
+                let screen_x = self.screen_min.x + (quad_x as i32 * 2);
                 let index = self.index_from_xy(screen_x, screen_y);
 
                 let depth = self.depth[index];
@@ -66,12 +66,17 @@ impl TileRasterizer {
                 }
 
                 let pixel_x = Vec4::new(
-                    (screen_x + 0) as f32 + 0.5,
-                    (screen_x + 1) as f32 + 0.5,
-                    (screen_x + 2) as f32 + 0.5,
-                    (screen_x + 3) as f32 + 0.5,
+                    (screen_x as f32) + 0.5,
+                    (screen_x as f32) + 1.5,
+                    (screen_x as f32) + 0.5,
+                    (screen_x as f32) + 1.5,
                 );
-                let pixel_y = Vec4::splat(screen_y as f32 + 0.5);
+                let pixel_y = Vec4::new(
+                    (screen_y as f32) + 0.5,
+                    (screen_y as f32) + 0.5,
+                    (screen_y as f32) + 1.5,
+                    (screen_y as f32) + 1.5,
+                );
 
                 let ndc_x = pixel_x * rcp_camera_width * 2.0 - Vec4::ONE;
                 let ndc_y = (Vec4::ONE - pixel_y  * rcp_camera_height) * 2.0 - Vec4::ONE;
@@ -106,8 +111,8 @@ impl TileRasterizer {
         camera: &RenderCamera,
         packet: RasterPacket,
     ) {
-        let x_start = packet.screen_min.x & !3; // Align left to 4-pixels for SIMD alignment
-        let y_start = packet.screen_min.y;
+        let x_start = packet.screen_min.x & !1; // Align to quads
+        let y_start = packet.screen_min.y & !1;
         let mut p = IVec2::new(x_start, y_start);
 
         // Fetch the light
@@ -151,8 +156,8 @@ impl TileRasterizer {
         let c20 = p0.x * p2.y - p2.x * p0.y;
 
         // Step deltas for 4-pixel SIMD stepping
-        const STEP_X_SIZE: i32 = 4;
-        const STEP_Y_SIZE: i32 = 1;
+        const STEP_X_SIZE: i32 = 2;
+        const STEP_Y_SIZE: i32 = 2;
 
         let step_x01 = Vec4::splat(a01 * STEP_X_SIZE as f32);
         let step_x12 = Vec4::splat(a12 * STEP_X_SIZE as f32);
@@ -166,10 +171,15 @@ impl TileRasterizer {
         let x = Vec4::new(
             p.x as f32 + 0.5,
             p.x as f32 + 1.5,
-            p.x as f32 + 2.5,
-            p.x as f32 + 3.5,
+            p.x as f32 + 0.5,
+            p.x as f32 + 1.5,
         );
-        let y = Vec4::splat(p.y as f32 + 0.5);
+        let y = Vec4::new(
+            p.y as f32 + 0.5,
+            p.y as f32 + 0.5,
+            p.y as f32 + 1.5,
+            p.y as f32 + 1.5,
+        );
 
         // Edge function values: w0 = edge v1->v2, w1 = edge v2->v0, w2 = edge v0->v1
         let mut w0_row = Vec4::splat(a12) * x + Vec4::splat(b12) * y + Vec4::splat(c12);
@@ -577,17 +587,20 @@ impl TileRasterizer {
     }
 
     fn index_from_xy(&self, x: i32, y: i32) -> usize {
-        debug_assert_eq!(x % 4, 0, "x must be a multiple of 4 for SIMD alignment");
-        let local_y = y - self.screen_min.y;
-        let width = (self.screen_max.x - self.screen_min.x) as usize;
-        let width_vec4 = (width + 3) / 4;
-
-        // x is the leftmost pixel of the 4-pixel SIMD block
+        debug_assert!((x - self.screen_min.x) % 2 == 0 || (x - self.screen_min.x) % 2 == 1, "x within bounds");
+        debug_assert!((y - self.screen_min.y) % 2 == 0 || (y - self.screen_min.y) % 2 == 1, "y within bounds");
+    
         let local_x = x - self.screen_min.x;
-        let vec4_index = local_x as usize / 4;
-
-        let index = local_y as usize * width_vec4 + vec4_index;
-        index
+        let local_y = y - self.screen_min.y;
+    
+        let width = self.screen_max.x - self.screen_min.x;
+        let width_quads = width / 2;
+    
+        let quad_x = local_x / 2;
+        let quad_y = local_y / 2;
+    
+        let index = quad_y * width_quads + quad_x;
+        index as usize
     }
 }
 

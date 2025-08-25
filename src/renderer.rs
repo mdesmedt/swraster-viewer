@@ -22,6 +22,7 @@ use std::sync::Arc;
 ******************************************************************************/
 
 const TILE_SIZE: i32 = 32;
+const TILE_SIZE_QUADS: i32 = TILE_SIZE / 2;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -113,14 +114,15 @@ fn create_screen_tile(
 ) -> TileRasterizer {
     let width = (screen_max.x - screen_min.x) as usize;
     let height = (screen_max.y - screen_min.y) as usize;
-    let width_vec4 = (width + 3) / 4;
+    let width_quads = width / 2;
+    let height_quads = height / 2;
     TileRasterizer {
         screen_min,
         screen_max,
         packets_opaque: BumpQueue::new(pool.clone()),
         packets_translucent: BumpQueue::new(pool.clone()),
-        color: vec![UVec4::ZERO; width_vec4 * height],
-        depth: vec![Vec4::splat(f32::INFINITY); width_vec4 * height],
+        color: vec![UVec4::ZERO; width_quads * height_quads],
+        depth: vec![Vec4::splat(f32::INFINITY); width_quads * height_quads],
     }
 }
 
@@ -191,54 +193,59 @@ impl Renderer {
 
     // Copy all tiles pixels to the backbuffer
     pub fn blit_to_buffer(&self, buffer: &mut RenderBuffer) {
-        let tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
+        let num_tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
         buffer
             .pixels
-            .par_chunks_mut(buffer.width * 4)
+            .par_chunks_mut(buffer.width * 4 * 2) // 2 rows of quads
             .enumerate()
-            .for_each(|(y, buffer_row)| {
-                let y = y as i32;
-                let tile_y = y / TILE_SIZE;
+            .for_each(|(quad_y_index, buffer_rows)| {
+                let quad_y = quad_y_index as i32;
+                let pixel_y = quad_y * 2;
+                let tile_y = pixel_y / TILE_SIZE;
 
                 // Iterate through all tiles in this row
-                for tile_x in 0..tiles_x {
-                    let tile_index = tile_y * tiles_x + tile_x;
+                for tile_x in 0..num_tiles_x {
+                    let tile_index = tile_y * num_tiles_x + tile_x;
                     let tile = &self.tiles[tile_index as usize];
 
                     // Calculate the local y coordinate within this tile
-                    let local_y = y - tile.screen_min.y;
+                    let local_y_pixels = pixel_y - tile.screen_min.y;
+                    let local_y_quad = local_y_pixels / 2;
 
-                    let tile_width = (tile.screen_max.x - tile.screen_min.x) as usize;
-                    let width_vec4 = (tile_width + 3) / 4;
+                    let tile_width_pixels = tile.screen_max.x - tile.screen_min.x;
+                    let tile_width_quads = tile_width_pixels / 2;
 
-                    // Copy pixels from the tile row to the buffer row
-                    let tile_row_index = local_y as usize * width_vec4;
-                    for x_vec4 in 0..width_vec4 {
-                        let src_index = tile_row_index + x_vec4;
-                        let dst_base_x = tile.screen_min.x + x_vec4 as i32 * 4;
+                    // Copy quads from the tile to the buffer
+                    let src_index_base = local_y_quad * tile_width_quads;
+                    for quad_x in 0..tile_width_quads {
+                        let src_index = src_index_base + quad_x;
+                        let base_pixel_x = tile.screen_min.x + quad_x as i32 * 2;
 
-                        // Copy each component of the Vec4 to individual pixels
-                        let colors = tile.color[src_index].to_array();
-                        for i in 0..4 {
-                            // Write the 4 pixels in the X dimension
-                            let pixel_x = dst_base_x + i as i32;
-                            if pixel_x < self.width {
-                                // Read the u32 packed color
-                                let rgba = colors[i as usize];
-                                // Unpack the components
-                                let r: u8 = (rgba >> 0 & 0xFF) as u8;
-                                let g: u8 = (rgba >> 8 & 0xFF) as u8;
-                                let b: u8 = (rgba >> 16 & 0xFF) as u8;
+                        // Copy each element of the quad to individual pixels
+                        let colors = tile.color[src_index as usize].to_array();
+                        for sub_y in 0..2 {
+                            for sub_x in 0..2 {
+                                // Write the 4 pixels in the X dimension
+                                let pixel_x = base_pixel_x + sub_x;
+                                if pixel_x < self.width {
+                                    // Read the u32 packed color
+                                    let rgba = colors[(sub_y * 2 + sub_x) as usize];
 
-                                // Write the components to the buffer
-                                let offset = pixel_x as usize * 4;
-                                // TODO: Fix this being backwards after switching to pixels
-                                buffer_row[offset] = b;
-                                buffer_row[offset + 1] = g;
-                                buffer_row[offset + 2] = r;
+                                    // Unpack the components
+                                    let r: u8 = (rgba >> 0 & 0xFF) as u8;
+                                    let g: u8 = (rgba >> 8 & 0xFF) as u8;
+                                    let b: u8 = (rgba >> 16 & 0xFF) as u8;
 
-                                // Assume A is never written to
-                                //buffer_row[offset + 3] = 0xFF;
+                                    // Write the components to the backbuffer
+                                    let dst_offset = (pixel_x + sub_y * self.width) as usize * 4;
+                                    // TODO: Fix this being backwards after switching to pixels
+                                    buffer_rows[dst_offset] = b;
+                                    buffer_rows[dst_offset + 1] = g;
+                                    buffer_rows[dst_offset + 2] = r;
+
+                                    // Assume A is never written to
+                                    //buffer_row[offset + 3] = 0xFF;
+                                }
                             }
                         }
                     }
