@@ -311,6 +311,12 @@ impl TileRasterizer {
 
                 // TODO: On depth=INF pixels just compute the skybox here
 
+                if !depth_mask.any() {
+                    continue;
+                }
+
+                let mut out_color = UVec4::ZERO;
+
                 // Consume all possible packets in packet_index uniformly
                 let mut remaining = depth_mask;
                 while remaining.any() {
@@ -321,7 +327,8 @@ impl TileRasterizer {
                     let packet_index = packet_index_vec[lane];
 
                     // Build mask for all lanes equal to this value
-                    let mask = bvec4_to_bvec4a(packet_index_vec.cmpeq(UVec4::splat(packet_index)));
+                    let mask_bvec4 = packet_index_vec.cmpeq(UVec4::splat(packet_index));
+                    let mask = bvec4_to_bvec4a(mask_bvec4);
 
                     let bary0 = self.bary0[index];
                     let bary1 = self.bary1[index];
@@ -358,12 +365,15 @@ impl TileRasterizer {
                     // Execute shader
                     let color = pbr_shader::<true>(shading_params);
 
-                    // Write color
-                    self.write_pixels(screen_x, screen_y, color, mask);
+                    // Store fragments
+                    out_color = UVec4::select(mask_bvec4, color, out_color);
 
                     // Clear out the lanes we just handled
                     remaining &= !mask;
                 }
+
+                // Write color
+                self.write_pixels(screen_x, screen_y, out_color, depth_mask);
             }
         }
     }
