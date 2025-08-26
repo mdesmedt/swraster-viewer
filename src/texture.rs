@@ -7,10 +7,9 @@ use crate::scene::{SceneError, SceneResult};
 
 pub struct Texture {
     pub width: u32,
-    #[allow(dead_code)]
     pub height: u32,
-    pub height_minus_one: f32,
-    pub width_minus_one: f32,
+    pub height_f: f32,
+    pub width_f: f32,
     pub data: Vec<Vec4>, // Vec4 floating point data
 }
 
@@ -158,8 +157,8 @@ impl TextureAndSampler {
 
     pub fn sample_point(&self, u: f32, v: f32) -> Vec4 {
         // Texel coordinates
-        let x_f = u * self.texture.width_minus_one;
-        let y_f = v * self.texture.height_minus_one;
+        let x_f = u * self.texture.width_f - 0.5;
+        let y_f = v * self.texture.height_f - 0.5;
 
         let x = x_f as u32;
         let y = y_f as u32;
@@ -169,8 +168,8 @@ impl TextureAndSampler {
 
     pub fn _sample_bilinear(&self, u: f32, v: f32) -> Vec4 {
         // Texel coordinates
-        let x_f = u * self.texture.width_minus_one;
-        let y_f = v * self.texture.height_minus_one;
+        let x_f = u * self.texture.width_f - 0.5;
+        let y_f = v * self.texture.height_f - 0.5;
 
         // Sample four texels
         let x0 = x_f.floor() as u32;
@@ -261,8 +260,8 @@ impl TextureCache {
                 Ok(Texture {
                     width,
                     height,
-                    height_minus_one: (height - 1) as f32,
-                    width_minus_one: (width - 1) as f32,
+                    height_f: height as f32,
+                    width_f: width as f32,
                     data,
                 })
             }
@@ -290,8 +289,8 @@ impl TextureCache {
         Texture {
             width,
             height,
-            height_minus_one: (height - 1) as f32,
-            width_minus_one: (width - 1) as f32,
+            height_f: height as f32,
+            width_f: width as f32,
             data,
         }
     }
