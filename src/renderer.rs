@@ -22,7 +22,6 @@ use std::sync::Arc;
 ******************************************************************************/
 
 const TILE_SIZE: i32 = 32;
-const TILE_SIZE_QUADS: i32 = TILE_SIZE / 2;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -123,6 +122,9 @@ fn create_screen_tile(
         packets_translucent: BumpQueue::new(pool.clone()),
         color: vec![UVec4::ZERO; width_quads * height_quads],
         depth: vec![Vec4::splat(f32::INFINITY); width_quads * height_quads],
+        packet_index: vec![UVec4::ZERO; width_quads * height_quads],
+        bary0: vec![Vec4::ZERO; width_quads * height_quads],
+        bary1: vec![Vec4::ZERO; width_quads * height_quads],
     }
 }
 
@@ -187,7 +189,7 @@ impl Renderer {
         // Rasterize each bin
         // One thread per bin avoids having to lock the tile constantly
         self.tiles.par_iter_mut().for_each(|tile| {
-            tile.rasterize_packets(scene, camera);
+            tile.render_tile(scene, camera);
         });
     }
 

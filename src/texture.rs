@@ -7,6 +7,7 @@ use crate::scene::{SceneError, SceneResult};
 
 pub struct Texture {
     pub width: u32,
+    #[allow(dead_code)]
     pub height: u32,
     pub height_minus_one: f32,
     pub width_minus_one: f32,
@@ -109,14 +110,14 @@ impl TextureAndSampler {
 
         // Face coordinates for cross layout
         // +X → (2,1), -X → (0,1), +Y → (1,0), -Y → (1,2), +Z → (1,1), -Z → (3,1)
-        let fx_x = Vec4::select(n.x.cmpge(Vec4::ZERO), Vec4::splat(2.0), Vec4::splat(0.0));
-        let fy_x = Vec4::splat(1.0);
+        let fx_x = Vec4::select(n.x.cmpge(Vec4::ZERO), Vec4::splat(2.0), Vec4::ZERO);
+        let fy_x = Vec4::ONE;
 
-        let fx_y = Vec4::splat(1.0);
-        let fy_y = Vec4::select(n.y.cmpge(Vec4::ZERO), Vec4::splat(0.0), Vec4::splat(2.0));
+        let fx_y = Vec4::ONE;
+        let fy_y = Vec4::select(n.y.cmpge(Vec4::ZERO), Vec4::ZERO, Vec4::splat(2.0));
 
-        let fx_z = Vec4::select(n.z.cmpge(Vec4::ZERO), Vec4::splat(1.0), Vec4::splat(3.0));
-        let fy_z = Vec4::splat(1.0);
+        let fx_z = Vec4::select(n.z.cmpge(Vec4::ZERO), Vec4::ONE, Vec4::splat(3.0));
+        let fy_z = Vec4::ONE;
 
         let fx = Vec4::select(mx, fx_x, Vec4::select(my, fx_y, fx_z));
         let fy = Vec4::select(mx, fy_x, Vec4::select(my, fy_y, fy_z));

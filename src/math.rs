@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3, Vec4};
+use glam::{BVec4, BVec4A, Mat4, UVec4, Vec3, Vec4};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[cfg(target_arch = "aarch64")]
@@ -242,4 +242,93 @@ impl MulAssign<f32> for Vec3x4 {
         self.y *= scalar;
         self.z *= scalar;
     }
+}
+
+// Utility functions
+// TODO: Move these to a separate file
+
+pub fn pack_colors(color: Vec3x4) -> UVec4 {
+    // Gamma correct the final colors before packing
+    // Apply gamma 2.0 instead of 2.2 for perf
+    let color_r = sqrt_vec(color.x);
+    let color_g = sqrt_vec(color.y);
+    let color_b = sqrt_vec(color.z);
+
+    UVec4::new(
+        ((color_r.x * 255.0) as u32) << 16
+            | ((color_g.x * 255.0) as u32) << 8
+            | ((color_b.x * 255.0) as u32),
+        ((color_r.y * 255.0) as u32) << 16
+            | ((color_g.y * 255.0) as u32) << 8
+            | ((color_b.y * 255.0) as u32),
+        ((color_r.z * 255.0) as u32) << 16
+            | ((color_g.z * 255.0) as u32) << 8
+            | ((color_b.z * 255.0) as u32),
+        ((color_r.w * 255.0) as u32) << 16
+            | ((color_g.w * 255.0) as u32) << 8
+            | ((color_b.w * 255.0) as u32),
+    )
+}
+
+pub fn unpack_colors(color: UVec4) -> Vec3x4 {
+    // Extract red (bits 16-23)
+    let color_r = Vec4::new(
+        ((color.x >> 16) & 0xFF) as f32 / 255.0,
+        ((color.y >> 16) & 0xFF) as f32 / 255.0,
+        ((color.z >> 16) & 0xFF) as f32 / 255.0,
+        ((color.w >> 16) & 0xFF) as f32 / 255.0,
+    );
+
+    // Extract green (bits 8-15)
+    let color_g = Vec4::new(
+        ((color.x >> 8) & 0xFF) as f32 / 255.0,
+        ((color.y >> 8) & 0xFF) as f32 / 255.0,
+        ((color.z >> 8) & 0xFF) as f32 / 255.0,
+        ((color.w >> 8) & 0xFF) as f32 / 255.0,
+    );
+
+    // Extract blue (bits 0-7)
+    let color_b = Vec4::new(
+        (color.x & 0xFF) as f32 / 255.0,
+        (color.y & 0xFF) as f32 / 255.0,
+        (color.z & 0xFF) as f32 / 255.0,
+        (color.w & 0xFF) as f32 / 255.0,
+    );
+
+    Vec3x4::new(color_r * color_r, color_g * color_g, color_b * color_b)
+}
+
+pub fn bvec4_to_bvec4a(b: BVec4) -> BVec4A {
+    let arr: [bool; 4] = b.into();
+    BVec4A::from(arr)
+}
+
+pub fn bvec4a_to_bvec4(b: BVec4A) -> BVec4 {
+    let arr: [bool; 4] = b.into();
+    BVec4::from(arr)
+}
+
+pub fn interpolate_attribute(
+    a: f32,
+    b: f32,
+    c: f32,
+    bary0: Vec4,
+    bary1: Vec4,
+    bary2: Vec4,
+) -> Vec4 {
+    a * bary0 + b * bary1 + c * bary2
+}
+
+pub fn interpolate_attribute_vec3x4(
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    bary0: Vec4,
+    bary1: Vec4,
+    bary2: Vec4,
+) -> Vec3x4 {
+    let x = interpolate_attribute(a.x, b.x, c.x, bary0, bary1, bary2);
+    let y = interpolate_attribute(a.y, b.y, c.y, bary0, bary1, bary2);
+    let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
+    Vec3x4::new(x, y, z)
 }

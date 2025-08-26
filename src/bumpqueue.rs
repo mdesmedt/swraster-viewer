@@ -80,7 +80,6 @@ pub struct BumpQueue<T> {
     pool: Arc<BumpPool<T>>,
     blocks: boxcar::Vec<usize>,
     count: AtomicUsize,
-    head: usize,
 }
 
 impl<T> BumpQueue<T> {
@@ -89,7 +88,6 @@ impl<T> BumpQueue<T> {
             pool,
             blocks: boxcar::Vec::new(),
             count: AtomicUsize::new(0),
-            head: 0,
         }
     }
 
@@ -118,21 +116,12 @@ impl<T> BumpQueue<T> {
         block.write(local_idx, value);
     }
 
-    pub fn pop(&mut self) -> Option<T> {
-        if self.head >= self.count.load(Ordering::Relaxed) {
-            return None;
-        }
-
-        let idx = self.head;
-        let block_idx = idx / BLOCK_SIZE;
-        let local_idx = idx % BLOCK_SIZE;
-
+    pub fn get(&self, index: usize) -> T {
+        debug_assert!(index < self.len());
+        let block_idx = index / BLOCK_SIZE;
+        let local_idx = index % BLOCK_SIZE;
         let block = self.pool.get_block(self.blocks[block_idx]);
-        let value = block.read(local_idx);
-
-        self.head = idx + 1;
-
-        Some(value)
+        block.read(local_idx)
     }
 
     // Return all the blocks to the pool and reset the queue
@@ -142,7 +131,6 @@ impl<T> BumpQueue<T> {
         }
         self.blocks.clear();
         self.count.store(0, Ordering::Relaxed);
-        self.head = 0;
     }
 
     pub fn len(&self) -> usize {
