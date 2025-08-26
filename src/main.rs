@@ -23,6 +23,7 @@ mod math;
 mod raytracer;
 mod rendercamera;
 mod renderer;
+mod shader;
 mod texture;
 mod tilerasterizer;
 mod voxelgrid;
