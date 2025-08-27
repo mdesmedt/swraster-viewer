@@ -606,11 +606,19 @@ impl Renderer {
         let dy1 = p1.y - p0.y;
         let dy2 = p2.y - p0.y;
 
-        let du_dx = ((triangle.v1.uv.x - triangle.v0.uv.x) * dy2 - (triangle.v2.uv.x - triangle.v0.uv.x) * dy1) / signed_area;
-        let du_dy = ((triangle.v2.uv.x - triangle.v0.uv.x) * dx1 - (triangle.v1.uv.x - triangle.v0.uv.x) * dx2) / signed_area;
+        let du_dx = ((triangle.v1.uv.x - triangle.v0.uv.x) * dy2
+            - (triangle.v2.uv.x - triangle.v0.uv.x) * dy1)
+            / signed_area;
+        let du_dy = ((triangle.v2.uv.x - triangle.v0.uv.x) * dx1
+            - (triangle.v1.uv.x - triangle.v0.uv.x) * dx2)
+            / signed_area;
 
-        let dv_dx = ((triangle.v1.uv.y - triangle.v0.uv.y) * dy2 - (triangle.v2.uv.y - triangle.v0.uv.y) * dy1) / signed_area;
-        let dv_dy = ((triangle.v2.uv.y - triangle.v0.uv.y) * dx1 - (triangle.v1.uv.y - triangle.v0.uv.y) * dx2) / signed_area;
+        let dv_dx = ((triangle.v1.uv.y - triangle.v0.uv.y) * dy2
+            - (triangle.v2.uv.y - triangle.v0.uv.y) * dy1)
+            / signed_area;
+        let dv_dy = ((triangle.v2.uv.y - triangle.v0.uv.y) * dx1
+            - (triangle.v1.uv.y - triangle.v0.uv.y) * dx2)
+            / signed_area;
 
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(

@@ -254,10 +254,7 @@ impl TextureAndSampler {
         final_color
     }
 
-    pub fn compute_mip_level(
-        &self,
-        du_dv: Vec4,
-    ) -> u32 {
+    pub fn compute_mip_level(&self, du_dv: Vec4) -> u32 {
         let du_dx = du_dv.x;
         let du_dy = du_dv.y;
         let dv_dx = du_dv.z;
@@ -330,7 +327,7 @@ impl TextureCache {
         };
 
         // Try to load the texture
-        let mut texture =match image::open(&texture_path) {
+        let mut texture = match image::open(&texture_path) {
             Ok(img) => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
