@@ -30,8 +30,8 @@ impl Texture {
 
         for mip in 1..num_mips {
             self.mip_offsets.push(self.data.len());
-            let mip_width = width >> mip;
-            let mip_height = height >> mip;
+            let mip_width = (width >> mip).max(1);
+            let mip_height = (height >> mip).max(1);
 
             let prev_offset = self.mip_offsets[(mip - 1) as usize];
             let prev_width = self.mip_widths[(mip - 1) as usize];
