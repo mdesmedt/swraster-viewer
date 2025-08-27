@@ -425,6 +425,14 @@ impl App {
 
         match &mut *loading_state_guard {
             LoadingState::Loaded(render_state) => {
+                if !loading_complete {
+                    // First frame after loading
+                    if self.settings.disable_vsync {
+                        self.pixels.as_mut().unwrap().enable_vsync(false);
+                    }
+                    loading_complete = true;
+                }
+
                 // Scene is loaded, handle input and render
                 let camera = &mut render_state.camera;
 
@@ -500,8 +508,6 @@ impl App {
 
                 // Render the scene
                 self.renderer.render_scene(&render_state.scene, camera);
-
-                loading_complete = true;
             }
             LoadingState::Loading => {
                 // Do nothing
@@ -582,10 +588,6 @@ impl ApplicationHandler for App {
         let surface_texture =
             SurfaceTexture::new(window_size.width, window_size.height, window.clone());
         let mut pixels = Pixels::new(WIDTH as u32, HEIGHT as u32, surface_texture).unwrap();
-
-        if self.settings.disable_vsync {
-            pixels.enable_vsync(false);
-        }
 
         // Set scaling mode
         pixels.set_scaling_mode(pixels::ScalingMode::Fill);
