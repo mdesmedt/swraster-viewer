@@ -554,6 +554,7 @@ impl Renderer {
         let p2 = self.clip_to_screen(triangle.vertices[2].pos_clip);
 
         // NOTE: At this point triangles are CW front-facing because of screen coordinate conversion
+        // TODO: Just figure out how to keep CCW facing triangles in screen space and deal with it
 
         // Compute signed area
         let signed_area = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
@@ -571,7 +572,8 @@ impl Renderer {
             1.0 / triangle.vertices[2].pos_clip.w,
         ];
 
-        let one_over_area = 1.0 / signed_area;
+        // TODO: Flip signed area because of screen space flip
+        let one_over_area = -(1.0 / signed_area);
 
         let z_over_w = [
             triangle.vertices[0].pos_clip.z * one_over_w[0],
@@ -610,10 +612,10 @@ impl Renderer {
         let uv0 = triangle.vertices[0].uv;
         let uv1 = triangle.vertices[1].uv;
         let uv2 = triangle.vertices[2].uv;
-        let du_dx = ((uv1.x - uv0.x) * dy2 - (uv2.x - uv0.x) * dy1) / signed_area;
-        let du_dy = ((uv2.x - uv0.x) * dx1 - (uv1.x - uv0.x) * dx2) / signed_area;
-        let dv_dx = ((uv1.y - uv0.y) * dy2 - (uv2.y - uv0.y) * dy1) / signed_area;
-        let dv_dy = ((uv2.y - uv0.y) * dx1 - (uv1.y - uv0.y) * dx2) / signed_area;
+        let du_dx = ((uv1.x - uv0.x) * dy2 - (uv2.x - uv0.x) * dy1) * one_over_area;
+        let du_dy = ((uv2.x - uv0.x) * dx1 - (uv1.x - uv0.x) * dx2) * one_over_area;
+        let dv_dx = ((uv1.y - uv0.y) * dy2 - (uv2.y - uv0.y) * dy1) * one_over_area;
+        let dv_dy = ((uv2.y - uv0.y) * dx1 - (uv1.y - uv0.y) * dx2) * one_over_area;
 
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(

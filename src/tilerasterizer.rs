@@ -163,8 +163,7 @@ impl TileRasterizer {
         let p1 = packet.pos_screen[1];
         let p2 = packet.pos_screen[2];
 
-        // Invert one over area to take the winding switch into account
-        let one_over_area_vec = Vec4::splat(-packet.one_over_area);
+        let one_over_area_vec = Vec4::splat(packet.one_over_area);
 
         // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
