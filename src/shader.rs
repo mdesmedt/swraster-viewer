@@ -123,8 +123,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
     let camera = shading_params.camera;
     let scene = shading_params.scene;
 
-    let du_dv = packet.du_dv;
-
     // Begin attribute interpolation
 
     let w = 1.0
@@ -182,6 +180,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
         bary1,
         bary2,
     ) * w;
+
+    let du_dv = packet.du_dv * w;
 
     let mut normal_world = input_normal;
 

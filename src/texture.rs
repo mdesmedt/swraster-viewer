@@ -260,20 +260,17 @@ impl TextureAndSampler {
         let dv_dx = du_dv.z;
         let dv_dy = du_dv.w;
 
-        let dudx_tex = du_dx * self.texture.width_f;
-        let dudy_tex = du_dy * self.texture.height_f;
-        let dvdx_tex = dv_dx * self.texture.width_f;
-        let dvdy_tex = dv_dy * self.texture.height_f;
+        let du_dx_tex = du_dx * self.texture.width_f;
+        let du_dy_tex = du_dy * self.texture.width_f;
+        let dv_dx_tex = dv_dx * self.texture.height_f;
+        let dv_dy_tex = dv_dy * self.texture.height_f;
 
-        let dx2 = dudx_tex * dudx_tex + dvdx_tex * dvdx_tex;
-        let dy2 = dudy_tex * dudy_tex + dvdy_tex * dvdy_tex;
-        let footprint = dx2.max(dy2).sqrt();
+        let dx2 = du_dx_tex * du_dx_tex + dv_dx_tex * dv_dx_tex;
+        let dy2 = du_dy_tex * du_dy_tex + dv_dy_tex * dv_dy_tex;
+        let footprint = dx2.max(dy2);
 
-        if footprint <= 1.0 {
-            return 0;
-        }
-        let mip = footprint.log2();
-        (mip as u32).min(self.texture.max_mip_level)
+        let mip = (footprint.max(1.0) as u32).ilog2() >> 1;
+        mip.min(self.texture.max_mip_level)
     }
 }
 

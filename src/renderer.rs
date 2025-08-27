@@ -609,13 +609,17 @@ impl Renderer {
         let dx2 = p2.x - p0.x;
         let dy1 = p1.y - p0.y;
         let dy2 = p2.y - p0.y;
-        let uv0 = triangle.vertices[0].uv;
-        let uv1 = triangle.vertices[1].uv;
-        let uv2 = triangle.vertices[2].uv;
-        let du_dx = ((uv1.x - uv0.x) * dy2 - (uv2.x - uv0.x) * dy1) * one_over_area;
-        let du_dy = ((uv2.x - uv0.x) * dx1 - (uv1.x - uv0.x) * dx2) * one_over_area;
-        let dv_dx = ((uv1.y - uv0.y) * dy2 - (uv2.y - uv0.y) * dy1) * one_over_area;
-        let dv_dy = ((uv2.y - uv0.y) * dx1 - (uv1.y - uv0.y) * dx2) * one_over_area;
+        let uv0 = uv_over_w[0];
+        let uv1 = uv_over_w[1];
+        let uv2 = uv_over_w[2];
+        let du1 = uv1.x - uv0.x;
+        let du2 = uv2.x - uv0.x;
+        let dv1 = uv1.y - uv0.y;
+        let dv2 = uv2.y - uv0.y;
+        let du_dx = (du1 * dy2 - du2 * dy1) * one_over_area;
+        let du_dy = (du2 * dx1 - du1 * dx2) * one_over_area;
+        let dv_dx = (dv1 * dy2 - dv2 * dy1) * one_over_area;
+        let dv_dy = (dv2 * dx1 - dv1 * dx2) * one_over_area;
 
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(
