@@ -6,6 +6,7 @@ use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec4};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /******************************************************************************
  * This is the main code of this project. A simple software rasterizer.
@@ -149,6 +150,10 @@ pub struct Renderer {
     height: i32,
     tiles: Vec<TileRasterizer>,
     nodes_by_distance: Vec<usize>,
+    timer_clipbin: Duration,
+    timer_rasterizer: Duration,
+    last_print_time: Instant,
+    frame_count: u32,
 }
 
 impl Renderer {
@@ -173,6 +178,10 @@ impl Renderer {
             height,
             tiles,
             nodes_by_distance: Vec::new(),
+            timer_clipbin: Duration::ZERO,
+            timer_rasterizer: Duration::ZERO,
+            last_print_time: Instant::now(),
+            frame_count: 0,
         }
     }
 
@@ -182,16 +191,37 @@ impl Renderer {
         self.compute_nodes_by_distance(scene, camera);
 
         // Clip and bin primitives in each node in the scene in parallel
+        let clipbin_start = Instant::now();
         self.nodes_by_distance.par_iter().for_each(|node_index| {
             let node = &scene.nodes[*node_index];
             self.render_node(scene, camera, node, camera.view_project_matrix);
         });
+        self.timer_clipbin += clipbin_start.elapsed();
 
         // Rasterize each bin
         // One thread per bin avoids having to lock the tile constantly
+        let rasterizer_start = Instant::now();
         self.tiles.par_iter_mut().for_each(|tile| {
             tile.render_tile(scene, camera);
         });
+        self.timer_rasterizer += rasterizer_start.elapsed();
+
+        let now = Instant::now();
+        if now.duration_since(self.last_print_time) >= Duration::from_secs(1) {
+            let clipbin_avg = self.timer_clipbin.as_secs_f64() / self.frame_count as f64;
+            let rasterizer_avg = self.timer_rasterizer.as_secs_f64() / self.frame_count as f64;
+            let clipbin_ms = clipbin_avg * 1000.0;
+            let rasterizer_ms = rasterizer_avg * 1000.0;
+            println!("Clipping:       {:.2} ms", clipbin_ms);
+            println!("Rasterization:  {:.2} ms", rasterizer_ms);
+            println!("Total:          {:.2} ms", clipbin_ms + rasterizer_ms);
+            println!();
+            self.last_print_time = now;
+            self.frame_count = 0;
+            self.timer_clipbin = Duration::ZERO;
+            self.timer_rasterizer = Duration::ZERO;
+        }
+        self.frame_count += 1;
     }
 
     // Copy all tiles pixels to the backbuffer
