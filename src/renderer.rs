@@ -75,6 +75,7 @@ pub struct RasterPacket {
     pub pos_world_over_w: [Vec3; 3],
     pub mesh_index: u32,
     pub avg_z: OrderedFloat<f32>,
+    pub du_dv: Vec4,
 }
 
 impl<'a> RenderBuffer<'a> {
@@ -569,6 +570,18 @@ impl Renderer {
             triangle.v2.pos_world * one_over_w[2],
         ];
 
+        // Compute uv derivatives
+        let dx1 = p1.x - p0.x;
+        let dx2 = p2.x - p0.x;
+        let dy1 = p1.y - p0.y;
+        let dy2 = p2.y - p0.y;
+
+        let du_dx = ((triangle.v1.uv.x - triangle.v0.uv.x) * dy2 - (triangle.v2.uv.x - triangle.v0.uv.x) * dy1) / signed_area;
+        let du_dy = ((triangle.v2.uv.x - triangle.v0.uv.x) * dx1 - (triangle.v1.uv.x - triangle.v0.uv.x) * dx2) / signed_area;
+
+        let dv_dx = ((triangle.v1.uv.y - triangle.v0.uv.y) * dy2 - (triangle.v2.uv.y - triangle.v0.uv.y) * dy1) / signed_area;
+        let dv_dy = ((triangle.v2.uv.y - triangle.v0.uv.y) * dx1 - (triangle.v1.uv.y - triangle.v0.uv.y) * dx2) / signed_area;
+
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(
             p0.x.min(p1.x).min(p2.x).max(0.0).floor() as i32,
@@ -629,6 +642,7 @@ impl Renderer {
                             mesh_index: triangle.mesh_index as u32,
                             one_over_area: one_over_area,
                             avg_z: avg_z,
+                            du_dv: Vec4::new(du_dx, du_dy, dv_dx, dv_dy),
                         };
 
                         if MODE_OPAQUE {

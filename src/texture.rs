@@ -11,6 +11,56 @@ pub struct Texture {
     pub height_f: f32,
     pub width_f: f32,
     pub data: Vec<Vec4>, // Vec4 floating point data
+    pub max_mip_level: u32,
+    pub mip_offsets: Vec<usize>,
+    pub mip_widths: Vec<u32>,
+    pub mip_heights: Vec<u32>,
+    pub mip_widths_f: Vec<f32>,
+    pub mip_heights_f: Vec<f32>,
+}
+
+impl Texture {
+    pub fn generate_mipmaps(&mut self) {
+        assert!(self.max_mip_level == 0, "Texture already has mipmaps");
+        assert!(self.mip_offsets[0] == 0, "Wrong mip 0 offset");
+
+        let width = self.width;
+        let height = self.height;
+        let num_mips = 1 + (width.max(height) as u32).ilog2();
+
+        for mip in 1..num_mips {
+            self.mip_offsets.push(self.data.len());
+            let mip_width = width >> mip;
+            let mip_height = height >> mip;
+
+            let prev_offset = self.mip_offsets[(mip - 1) as usize];
+            let prev_width = self.mip_widths[(mip - 1) as usize];
+            let prev_height = self.mip_heights[(mip - 1) as usize];
+
+            for y in 0..mip_height {
+                for x in 0..mip_width {
+                    let x0 = x * 2;
+                    let y0 = y * 2;
+                    let x1 = (x0 + 1).min(prev_width - 1);
+                    let y1 = (y0 + 1).min(prev_height - 1);
+
+                    let p00 = self.data[prev_offset + (y0 * prev_width + x0) as usize];
+                    let p10 = self.data[prev_offset + (y0 * prev_width + x1) as usize];
+                    let p01 = self.data[prev_offset + (y1 * prev_width + x0) as usize];
+                    let p11 = self.data[prev_offset + (y1 * prev_width + x1) as usize];
+
+                    let avg = (p00 + p10 + p01 + p11) / 4.0;
+                    self.data.push(avg);
+                }
+            }
+
+            self.mip_widths.push(mip_width);
+            self.mip_heights.push(mip_height);
+            self.mip_widths_f.push(mip_width as f32);
+            self.mip_heights_f.push(mip_height as f32);
+            self.max_mip_level += 1;
+        }
+    }
 }
 
 pub enum WrapMode {
@@ -135,51 +185,64 @@ impl TextureAndSampler {
         // Sample four texels
         let mut texels = Mat4::ZERO;
         for i in 0..4 {
-            *texels.col_mut(i) = self.sample_point(u[i], v[i]);
+            *texels.col_mut(i) = self.sample_point(u[i], v[i], 0);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
     }
 
-    pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4) -> Mat4 {
+    pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Mat4 {
         // Sample four texels
         let mut texels = Mat4::ZERO;
+        let mip_level = self.compute_mip_level(du_dv);
+        //println!("mip_level: {}", mip_level);
         for i in 0..4 {
             // Apply wrap modes to UV coordinates
             let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
             let v = Self::apply_wrap_mode(v_vec[i], &self.sampler.wrap_t);
 
-            *texels.col_mut(i) = self.sample_point(u, v);
+            *texels.col_mut(i) = self.sample_bilinear(u, v, mip_level);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
     }
 
-    pub fn sample_point(&self, u: f32, v: f32) -> Vec4 {
+    pub fn sample_point(&self, u: f32, v: f32, mip_level: u32) -> Vec4 {
+        let width = self.texture.mip_widths[mip_level as usize];
+        let width_f = self.texture.mip_widths_f[mip_level as usize];
+        let height_f = self.texture.mip_heights_f[mip_level as usize];
+
         // Texel coordinates
-        let x_f = u * self.texture.width_f - 0.5;
-        let y_f = v * self.texture.height_f - 0.5;
+        let x_f = u * width_f - 0.5;
+        let y_f = v * height_f - 0.5;
 
         let x = x_f as u32;
         let y = y_f as u32;
 
-        self.texture.data[(y * self.texture.width + x) as usize]
+        let offset = self.texture.mip_offsets[mip_level as usize] + (y * width + x) as usize;
+        self.texture.data[offset]
     }
 
-    pub fn _sample_bilinear(&self, u: f32, v: f32) -> Vec4 {
+    pub fn sample_bilinear(&self, u: f32, v: f32, mip_level: u32) -> Vec4 {
+        let width = self.texture.mip_widths[mip_level as usize];
+        let height = self.texture.mip_heights[mip_level as usize];
+        let width_f = self.texture.mip_widths_f[mip_level as usize];
+        let height_f = self.texture.mip_heights_f[mip_level as usize];
+
         // Texel coordinates
-        let x_f = u * self.texture.width_f - 0.5;
-        let y_f = v * self.texture.height_f - 0.5;
+        let x_f = u * width_f - 0.5;
+        let y_f = v * height_f - 0.5;
 
         // Sample four texels
+        let offset = self.texture.mip_offsets[mip_level as usize];
         let x0 = x_f.floor() as u32;
         let y0 = y_f.floor() as u32;
-        let x1 = (x0 + 1).min(self.texture.width - 1);
-        let y1 = (y0 + 1).min(self.texture.height - 1);
-        let p00 = self.texture.data[(y0 * self.texture.width + x0) as usize];
-        let p10 = self.texture.data[(y0 * self.texture.width + x1) as usize];
-        let p01 = self.texture.data[(y1 * self.texture.width + x0) as usize];
-        let p11 = self.texture.data[(y1 * self.texture.width + x1) as usize];
+        let x1 = (x0 + 1).min(width - 1);
+        let y1 = (y0 + 1).min(height - 1);
+        let p00 = self.texture.data[offset + (y0 * width + x0) as usize];
+        let p10 = self.texture.data[offset + (y0 * width + x1) as usize];
+        let p01 = self.texture.data[offset + (y1 * width + x0) as usize];
+        let p11 = self.texture.data[offset + (y1 * width + x1) as usize];
 
         // Bilinear filter
         let fx = x_f - x0 as f32;
@@ -189,6 +252,31 @@ impl TextureAndSampler {
         let final_color = lerp_x0 * (1.0 - fy) + lerp_x1 * fy;
 
         final_color
+    }
+
+    pub fn compute_mip_level(
+        &self,
+        du_dv: Vec4,
+    ) -> u32 {
+        let du_dx = du_dv.x;
+        let du_dy = du_dv.y;
+        let dv_dx = du_dv.z;
+        let dv_dy = du_dv.w;
+
+        let dudx_tex = du_dx * self.texture.width_f;
+        let dudy_tex = du_dy * self.texture.height_f;
+        let dvdx_tex = dv_dx * self.texture.width_f;
+        let dvdy_tex = dv_dy * self.texture.height_f;
+
+        let dx2 = dudx_tex * dudx_tex + dvdx_tex * dvdx_tex;
+        let dy2 = dudy_tex * dudy_tex + dvdy_tex * dvdy_tex;
+        let footprint = dx2.max(dy2).sqrt();
+
+        if footprint <= 1.0 {
+            return 0;
+        }
+        let mip = footprint.log2();
+        (mip as u32).min(self.texture.max_mip_level)
     }
 }
 
@@ -242,7 +330,7 @@ impl TextureCache {
         };
 
         // Try to load the texture
-        match image::open(&texture_path) {
+        let mut texture =match image::open(&texture_path) {
             Ok(img) => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
@@ -263,13 +351,25 @@ impl TextureCache {
                     height_f: height as f32,
                     width_f: width as f32,
                     data,
+                    max_mip_level: 0,
+                    mip_offsets: vec![0],
+                    mip_widths: vec![width],
+                    mip_heights: vec![height],
+                    mip_widths_f: vec![width as f32],
+                    mip_heights_f: vec![height as f32],
                 })
             }
             Err(e) => Err(SceneError::MissingData(format!(
                 "Could not load texture '{}' from path '{}': {}",
                 uri, texture_path, e
             ))),
+        };
+
+        if let Ok(texture) = &mut texture {
+            texture.generate_mipmaps();
         }
+
+        texture
     }
 
     fn create_fallback_texture(&self) -> Texture {
@@ -292,6 +392,12 @@ impl TextureCache {
             height_f: height as f32,
             width_f: width as f32,
             data,
+            max_mip_level: 0,
+            mip_offsets: vec![0],
+            mip_widths: vec![width],
+            mip_heights: vec![height],
+            mip_widths_f: vec![width as f32],
+            mip_heights_f: vec![height as f32],
         }
     }
 

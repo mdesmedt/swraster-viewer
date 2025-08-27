@@ -123,6 +123,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
     let camera = shading_params.camera;
     let scene = shading_params.scene;
 
+    let du_dv = packet.du_dv;
+
     // Begin attribute interpolation
 
     let w = 1.0
@@ -185,7 +187,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
     // Apply normal mapping if we have a normal map
     if let Some(normal_map) = &material.normal_texture {
-        let normal_map_mat = normal_map.sample4(uv_x, uv_y);
+        let normal_map_mat = normal_map.sample4(uv_x, uv_y, du_dv);
         let mut tangent_space_normal = (Vec3x4::new(
             normal_map_mat.col(0),
             normal_map_mat.col(1),
@@ -242,7 +244,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
+        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y, du_dv);
 
         // Alpha test
         if material.is_alpha_tested {
@@ -262,7 +264,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
     // If we have a metallic/roughness texture, sample it
     if let Some(spec_texture) = &material.metallic_roughness_texture {
-        let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y);
+        let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y, du_dv);
         roughness *= metallic_roughness_mat.col(1);
         metallic *= metallic_roughness_mat.col(2);
     }
@@ -285,7 +287,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
         // Sample transmission texture if provided
         if let Some(transmission_texture) = &material.transmission_texture {
-            let transmission_mat = transmission_texture.sample4(uv_x, uv_y);
+            let transmission_mat = transmission_texture.sample4(uv_x, uv_y, du_dv);
             transmission *= transmission_mat.col(0);
         }
 
@@ -355,6 +357,8 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
     let material = shading_params.material;
     let mask = shading_params.mask;
 
+    let du_dv = packet.du_dv;
+
     let uv_x = interpolate_attribute(
         packet.uv_over_w[0].x,
         packet.uv_over_w[1].x,
@@ -374,7 +378,7 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
 
     let mut out_mask = mask;
     if let Some(diffuse_texture) = &material.base_color_texture {
-        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y);
+        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y, du_dv);
         let alpha = diffuse_mat.col(3);
         out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
     }
