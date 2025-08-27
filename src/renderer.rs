@@ -616,10 +616,11 @@ impl Renderer {
         let du2 = uv2.x - uv0.x;
         let dv1 = uv1.y - uv0.y;
         let dv2 = uv2.y - uv0.y;
-        let du_dx = (du1 * dy2 - du2 * dy1) * one_over_area;
-        let du_dy = (du2 * dx1 - du1 * dx2) * one_over_area;
-        let dv_dx = (dv1 * dy2 - dv2 * dy1) * one_over_area;
-        let dv_dy = (dv2 * dx1 - dv1 * dx2) * one_over_area;
+        let du_dx = du1 * dy2 - du2 * dy1;
+        let du_dy = du2 * dx1 - du1 * dx2;
+        let dv_dx = dv1 * dy2 - dv2 * dy1;
+        let dv_dy = dv2 * dx1 - dv1 * dx2;
+        let du_dv = Vec4::new(du_dx, du_dy, dv_dx, dv_dy) * Vec4::splat(one_over_area);
 
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(
@@ -680,7 +681,7 @@ impl Renderer {
                         mesh_index: triangle.mesh_index as u32,
                         one_over_area: one_over_area,
                         avg_z: avg_z,
-                        du_dv: Vec4::new(du_dx, du_dy, dv_dx, dv_dy),
+                        du_dv: du_dv,
                     };
 
                     if MODE_OPAQUE {

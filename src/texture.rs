@@ -8,8 +8,7 @@ use crate::scene::{SceneError, SceneResult};
 pub struct Texture {
     pub width: u32,
     pub height: u32,
-    pub height_f: f32,
-    pub width_f: f32,
+    pub width_height_vec: Vec4,
     pub data: Vec<Vec4>, // Vec4 floating point data
     pub max_mip_level: u32,
     pub mip_offsets: Vec<usize>,
@@ -255,19 +254,14 @@ impl TextureAndSampler {
     }
 
     pub fn compute_mip_level(&self, du_dv: Vec4) -> u32 {
-        let du_dx = du_dv.x;
-        let du_dy = du_dv.y;
-        let dv_dx = du_dv.z;
-        let dv_dy = du_dv.w;
+        let du_dv_tex = du_dv * self.texture.width_height_vec;
 
-        let du_dx_tex = du_dx * self.texture.width_f;
-        let du_dy_tex = du_dy * self.texture.width_f;
-        let dv_dx_tex = dv_dx * self.texture.height_f;
-        let dv_dy_tex = dv_dy * self.texture.height_f;
-
-        let dx2 = du_dx_tex * du_dx_tex + dv_dx_tex * dv_dx_tex;
-        let dy2 = du_dy_tex * du_dy_tex + dv_dy_tex * dv_dy_tex;
-        let footprint = dx2.max(dy2);
+        let dx2 = du_dv_tex.x * du_dv_tex.x + du_dv_tex.z * du_dv_tex.z;
+        let dy2 = du_dv_tex.y * du_dv_tex.y + du_dv_tex.w * du_dv_tex.w;
+        
+        // Hack to preserve some sharpness on sloped surfaces
+        //let footprint = dx2.max(dy2);
+        let footprint = (dx2 + dy2) * 0.5;
 
         let mip = (footprint.max(1.0) as u32).ilog2() >> 1;
         mip.min(self.texture.max_mip_level)
@@ -342,8 +336,7 @@ impl TextureCache {
                 Ok(Texture {
                     width,
                     height,
-                    height_f: height as f32,
-                    width_f: width as f32,
+                    width_height_vec: Vec4::new(width as f32, width as f32, height as f32, height as f32),
                     data,
                     max_mip_level: 0,
                     mip_offsets: vec![0],
@@ -383,8 +376,7 @@ impl TextureCache {
         Texture {
             width,
             height,
-            height_f: height as f32,
-            width_f: width as f32,
+            width_height_vec: Vec4::new(width as f32, width as f32, height as f32, height as f32),
             data,
             max_mip_level: 0,
             mip_offsets: vec![0],
