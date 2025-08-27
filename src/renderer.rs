@@ -53,9 +53,7 @@ impl Vertex {
 
 #[derive(Copy, Clone)]
 pub struct Triangle {
-    pub v0: Vertex,
-    pub v1: Vertex,
-    pub v2: Vertex,
+    pub vertices: [Vertex; 3],
     pub mesh_index: usize,
     pub primitive_index: usize,
 }
@@ -424,27 +422,29 @@ impl Renderer {
                 let tangent_world2 = rotation_matrix * tangents[i2];
 
                 let triangle = Triangle {
-                    v0: Vertex {
-                        pos_clip: clip0,
-                        pos_world: world0.truncate(),
-                        normal: normal_world0,
-                        tangent: tangent_world0,
-                        uv: texcoords[i0],
-                    },
-                    v1: Vertex {
-                        pos_clip: clip1,
-                        pos_world: world1.truncate(),
-                        normal: normal_world1,
-                        tangent: tangent_world1,
-                        uv: texcoords[i1],
-                    },
-                    v2: Vertex {
-                        pos_clip: clip2,
-                        pos_world: world2.truncate(),
-                        normal: normal_world2,
-                        tangent: tangent_world2,
-                        uv: texcoords[i2],
-                    },
+                    vertices: [
+                        Vertex {
+                            pos_clip: clip0,
+                            pos_world: world0.truncate(),
+                            normal: normal_world0,
+                            tangent: tangent_world0,
+                            uv: texcoords[i0],
+                        },
+                        Vertex {
+                            pos_clip: clip1,
+                            pos_world: world1.truncate(),
+                            normal: normal_world1,
+                            tangent: tangent_world1,
+                            uv: texcoords[i1],
+                        },
+                        Vertex {
+                            pos_clip: clip2,
+                            pos_world: world2.truncate(),
+                            normal: normal_world2,
+                            tangent: tangent_world2,
+                            uv: texcoords[i2],
+                        },
+                    ],
                     mesh_index,
                     primitive_index,
                 };
@@ -493,9 +493,9 @@ impl Renderer {
         // Use a fixed-size buffer (assumed bound: 16 vertices) for the polygon.
         let mut poly: [Vertex; 16] = [Vertex::new_empty(); 16];
         let mut poly_len: usize = 3; // Start with the original triangle (3 vertices)
-        poly[0] = triangle.v0;
-        poly[1] = triangle.v1;
-        poly[2] = triangle.v2;
+        poly[0] = triangle.vertices[0];
+        poly[1] = triangle.vertices[1];
+        poly[2] = triangle.vertices[2];
 
         // Use a second fixed buffer (new_poly) for the "new" polygon.
         let mut new_poly: [Vertex; 16] = [Vertex::new_empty(); 16];
@@ -536,9 +536,7 @@ impl Renderer {
 
         for i in 1..poly_len - 1 {
             let triangle = Triangle {
-                v0: poly[0],
-                v1: poly[i],
-                v2: poly[i + 1],
+                vertices: [poly[0], poly[i], poly[i + 1]],
                 mesh_index: triangle.mesh_index,
                 primitive_index: triangle.primitive_index,
             };
@@ -551,9 +549,9 @@ impl Renderer {
     // Projects a triangle to screen space and bins it into tiles
     fn bin_triangle<const MODE_OPAQUE: bool>(&self, triangle: Triangle) {
         // Compute the screen space bounding box of the triangle
-        let p0 = self.clip_to_screen(triangle.v0.pos_clip);
-        let p1 = self.clip_to_screen(triangle.v1.pos_clip);
-        let p2 = self.clip_to_screen(triangle.v2.pos_clip);
+        let p0 = self.clip_to_screen(triangle.vertices[0].pos_clip);
+        let p1 = self.clip_to_screen(triangle.vertices[1].pos_clip);
+        let p2 = self.clip_to_screen(triangle.vertices[2].pos_clip);
 
         // NOTE: At this point triangles are CW front-facing because of screen coordinate conversion
 
@@ -568,57 +566,54 @@ impl Renderer {
         // Set up the values which the rasterizer will need
 
         let one_over_w = [
-            1.0 / triangle.v0.pos_clip.w,
-            1.0 / triangle.v1.pos_clip.w,
-            1.0 / triangle.v2.pos_clip.w,
+            1.0 / triangle.vertices[0].pos_clip.w,
+            1.0 / triangle.vertices[1].pos_clip.w,
+            1.0 / triangle.vertices[2].pos_clip.w,
         ];
 
         let one_over_area = 1.0 / signed_area;
 
         let z_over_w = [
-            triangle.v0.pos_clip.z * one_over_w[0],
-            triangle.v1.pos_clip.z * one_over_w[1],
-            triangle.v2.pos_clip.z * one_over_w[2],
+            triangle.vertices[0].pos_clip.z * one_over_w[0],
+            triangle.vertices[1].pos_clip.z * one_over_w[1],
+            triangle.vertices[2].pos_clip.z * one_over_w[2],
         ];
 
-        let normals = [triangle.v0.normal, triangle.v1.normal, triangle.v2.normal];
+        let normals = [
+            triangle.vertices[0].normal,
+            triangle.vertices[1].normal,
+            triangle.vertices[2].normal,
+        ];
         let tangents = [
-            triangle.v0.tangent,
-            triangle.v1.tangent,
-            triangle.v2.tangent,
+            triangle.vertices[0].tangent,
+            triangle.vertices[1].tangent,
+            triangle.vertices[2].tangent,
         ];
 
         let uv_over_w = [
-            triangle.v0.uv * one_over_w[0],
-            triangle.v1.uv * one_over_w[1],
-            triangle.v2.uv * one_over_w[2],
+            triangle.vertices[0].uv * one_over_w[0],
+            triangle.vertices[1].uv * one_over_w[1],
+            triangle.vertices[2].uv * one_over_w[2],
         ];
 
         let pos_world_over_w = [
-            triangle.v0.pos_world * one_over_w[0],
-            triangle.v1.pos_world * one_over_w[1],
-            triangle.v2.pos_world * one_over_w[2],
+            triangle.vertices[0].pos_world * one_over_w[0],
+            triangle.vertices[1].pos_world * one_over_w[1],
+            triangle.vertices[2].pos_world * one_over_w[2],
         ];
 
-        // Compute uv derivatives
+        // Compute uv derivatives for texture mapping during shading
         let dx1 = p1.x - p0.x;
         let dx2 = p2.x - p0.x;
         let dy1 = p1.y - p0.y;
         let dy2 = p2.y - p0.y;
-
-        let du_dx = ((triangle.v1.uv.x - triangle.v0.uv.x) * dy2
-            - (triangle.v2.uv.x - triangle.v0.uv.x) * dy1)
-            / signed_area;
-        let du_dy = ((triangle.v2.uv.x - triangle.v0.uv.x) * dx1
-            - (triangle.v1.uv.x - triangle.v0.uv.x) * dx2)
-            / signed_area;
-
-        let dv_dx = ((triangle.v1.uv.y - triangle.v0.uv.y) * dy2
-            - (triangle.v2.uv.y - triangle.v0.uv.y) * dy1)
-            / signed_area;
-        let dv_dy = ((triangle.v2.uv.y - triangle.v0.uv.y) * dx1
-            - (triangle.v1.uv.y - triangle.v0.uv.y) * dx2)
-            / signed_area;
+        let uv0 = triangle.vertices[0].uv;
+        let uv1 = triangle.vertices[1].uv;
+        let uv2 = triangle.vertices[2].uv;
+        let du_dx = ((uv1.x - uv0.x) * dy2 - (uv2.x - uv0.x) * dy1) / signed_area;
+        let du_dy = ((uv2.x - uv0.x) * dx1 - (uv1.x - uv0.x) * dx2) / signed_area;
+        let dv_dx = ((uv1.y - uv0.y) * dy2 - (uv2.y - uv0.y) * dy1) / signed_area;
+        let dv_dy = ((uv2.y - uv0.y) * dx1 - (uv1.y - uv0.y) * dx2) / signed_area;
 
         // Compute triangle bounding box
         let screen_min: IVec2 = IVec2::new(
@@ -641,7 +636,10 @@ impl Renderer {
 
         // Compute average z
         let avg_z = OrderedFloat(
-            (triangle.v0.pos_clip.z + triangle.v1.pos_clip.z + triangle.v2.pos_clip.z) / 3.0,
+            (triangle.vertices[0].pos_clip.z
+                + triangle.vertices[1].pos_clip.z
+                + triangle.vertices[2].pos_clip.z)
+                / 3.0,
         );
 
         // Send the packet to all intersecting bins
@@ -649,45 +647,40 @@ impl Renderer {
             for x in min_bin_x..max_bin_x {
                 let bin_index = y * bins_x + x;
                 if bin_index >= 0 && bin_index < self.tiles.len() as i32 {
-                    let binner = &self.tiles[bin_index as usize];
+                    let tile = &self.tiles[bin_index as usize];
 
                     // Clip the triangle bounds to this tile's bounds
                     let tile_clipped_min = IVec2::new(
-                        screen_min.x.max(binner.screen_min.x),
-                        screen_min.y.max(binner.screen_min.y),
+                        screen_min.x.max(tile.screen_min.x),
+                        screen_min.y.max(tile.screen_min.y),
                     );
                     let tile_clipped_max = IVec2::new(
-                        screen_max.x.min(binner.screen_max.x),
-                        screen_max.y.min(binner.screen_max.y),
+                        screen_max.x.min(tile.screen_max.x),
+                        screen_max.y.min(tile.screen_max.y),
                     );
 
-                    // Only send if there's actually an intersection
-                    if tile_clipped_min.x < tile_clipped_max.x
-                        && tile_clipped_min.y < tile_clipped_max.y
-                    {
-                        // Create a RasterPacket clipped to the tile
-                        let packet = RasterPacket {
-                            screen_min: tile_clipped_min,
-                            screen_max: tile_clipped_max,
-                            pos_screen: [p0, p1, p2],
-                            z_over_w: z_over_w,
-                            one_over_w: one_over_w,
-                            normals: normals,
-                            tangents: tangents,
-                            uv_over_w: uv_over_w,
-                            pos_world_over_w: pos_world_over_w,
-                            primitive_index: triangle.primitive_index as u32,
-                            mesh_index: triangle.mesh_index as u32,
-                            one_over_area: one_over_area,
-                            avg_z: avg_z,
-                            du_dv: Vec4::new(du_dx, du_dy, dv_dx, dv_dy),
-                        };
+                    // Create a RasterPacket clipped to the tile
+                    let packet = RasterPacket {
+                        screen_min: tile_clipped_min,
+                        screen_max: tile_clipped_max,
+                        pos_screen: [p0, p1, p2],
+                        z_over_w: z_over_w,
+                        one_over_w: one_over_w,
+                        normals: normals,
+                        tangents: tangents,
+                        uv_over_w: uv_over_w,
+                        pos_world_over_w: pos_world_over_w,
+                        primitive_index: triangle.primitive_index as u32,
+                        mesh_index: triangle.mesh_index as u32,
+                        one_over_area: one_over_area,
+                        avg_z: avg_z,
+                        du_dv: Vec4::new(du_dx, du_dy, dv_dx, dv_dy),
+                    };
 
-                        if MODE_OPAQUE {
-                            binner.packets_opaque.push(packet);
-                        } else {
-                            binner.packets_translucent.push(packet);
-                        }
+                    if MODE_OPAQUE {
+                        tile.packets_opaque.push(packet);
+                    } else {
+                        tile.packets_translucent.push(packet);
                     }
                 }
             }
