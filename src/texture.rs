@@ -184,7 +184,7 @@ impl TextureAndSampler {
         // Sample four texels
         let mut texels = Mat4::ZERO;
         for i in 0..4 {
-            *texels.col_mut(i) = self.sample_point(u[i], v[i], 0);
+            *texels.col_mut(i) = self.sample_bilinear(u[i], v[i], 0);
         }
         // Return the samples in columns of X, Y, Z and W
         texels.transpose()
