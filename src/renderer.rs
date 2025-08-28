@@ -1,6 +1,6 @@
 use crate::bumpqueue::{BumpPool, BumpQueue};
 use crate::rendercamera::RenderCamera;
-use crate::scene::{BoundingSphere, Node, Scene};
+use crate::scene::{BoundingSphere, Node, Primitive, Scene};
 use crate::tilerasterizer::*;
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3A, Vec4};
 use ordered_float::OrderedFloat;
@@ -128,18 +128,25 @@ fn create_screen_tile(
     }
 }
 
-#[inline]
-fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> bool {
-    // Transform the sphere to view space
+#[derive(PartialEq)]
+enum FrustumTestResult {
+    Inside,
+    Outside,
+    Intersecting,
+}
+
+fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> FrustumTestResult {
     let center_view = camera.view_matrix * sphere.center.extend(1.0);
-    let view_clip_planes = camera.view_clip_planes;
-    for plane in view_clip_planes {
+    let mut result = FrustumTestResult::Inside;
+    for plane in &camera.view_clip_planes {
         let distance = plane.dot(center_view);
         if distance < -sphere.radius {
-            return false;
+            return FrustumTestResult::Outside;
+        } else if distance < sphere.radius {
+            result = FrustumTestResult::Intersecting;
         }
     }
-    true
+    result
 }
 
 // Renderer which manages clipping, culling, binning and rasterization
@@ -378,10 +385,44 @@ impl Renderer {
         let bounding_sphere_world = model_matrix * &primitive.bounding_sphere;
 
         // Frustum culling with bounding sphere
-        if !test_sphere_frustum(&bounding_sphere_world, camera) {
-            return; // Cull the primitive
-        }
+        let frustum_test = test_sphere_frustum(&bounding_sphere_world, camera);
 
+        match frustum_test {
+            FrustumTestResult::Inside => {
+                // Rener primitive without clipping
+                self.render_primitive_inner::<MODE_OPAQUE, false>(
+                    mesh_index,
+                    primitive_index,
+                    model_matrix,
+                    mvp_matrix,
+                    primitive,
+                );
+            }
+            FrustumTestResult::Intersecting => {
+                // Render primitive with clipping
+                self.render_primitive_inner::<MODE_OPAQUE, true>(
+                    mesh_index,
+                    primitive_index,
+                    model_matrix,
+                    mvp_matrix,
+                    primitive,
+                );
+            }
+            FrustumTestResult::Outside => {
+                // Primitive is outside the frustum
+                return;
+            }
+        }
+    }
+
+    fn render_primitive_inner<const MODE_OPAQUE: bool, const ENABLE_CLIPPING: bool>(
+        &self,
+        mesh_index: usize,
+        primitive_index: usize,
+        model_matrix: Mat4,
+        mvp_matrix: Mat4,
+        primitive: &Primitive,
+    ) {
         let positions = &primitive.positions;
         let normals = &primitive.normals;
         let tangents = &primitive.tangents;
@@ -458,8 +499,13 @@ impl Renderer {
                     primitive_index,
                 };
 
-                // Send the triangle to the clipper
-                self.clip_against_frustum::<MODE_OPAQUE>(triangle);
+                if ENABLE_CLIPPING {
+                    // Send the triangle to the clipper
+                    self.clip_against_frustum::<MODE_OPAQUE>(triangle);
+                } else {
+                    // Bin the triangle without clipping
+                    self.bin_triangle::<MODE_OPAQUE>(triangle);
+                }
             }
         });
     }
