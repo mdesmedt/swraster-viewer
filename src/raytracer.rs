@@ -1,5 +1,5 @@
 use crate::scene::{Node, Primitive, Scene};
-use glam::Vec3;
+use glam::{Vec3, Vec3A};
 use parry3d::{
     math::{Isometry, Point, Vector},
     query::Ray,
@@ -40,7 +40,7 @@ impl RayTracer {
         let mut indices = Vec::with_capacity(primitive.indices.len());
 
         for position in &primitive.positions {
-            let pos_world = node.transform.transform_point3(*position);
+            let pos_world = Vec3A::from_vec4(node.transform * *position);
             vertices.push(Point::new(pos_world.x, pos_world.y, pos_world.z));
         }
 

@@ -1,4 +1,4 @@
-use glam::{BVec4, BVec4A, Mat4, UVec4, Vec3, Vec4};
+use glam::{BVec4, BVec4A, Mat4, UVec4, Vec3A, Vec4};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[cfg(target_arch = "aarch64")]
@@ -62,7 +62,7 @@ impl Vec3x4 {
         Self::new(Vec4::splat(x), Vec4::splat(y), Vec4::splat(z))
     }
 
-    pub fn from_vec3(v: Vec3) -> Self {
+    pub fn from_vec3a(v: Vec3A) -> Self {
         Self::new(Vec4::splat(v.x), Vec4::splat(v.y), Vec4::splat(v.z))
     }
 
@@ -320,9 +320,9 @@ pub fn interpolate_attribute(
 }
 
 pub fn interpolate_attribute_vec3x4(
-    a: Vec3,
-    b: Vec3,
-    c: Vec3,
+    a: Vec3A,
+    b: Vec3A,
+    c: Vec3A,
     bary0: Vec4,
     bary1: Vec4,
     bary2: Vec4,

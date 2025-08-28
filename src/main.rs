@@ -206,8 +206,8 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
         let camera_pos = scene.bounds.center + Vec3A::new(0.0, 0.0, camera_distance);
 
         RenderCamera::new(
-            Vec3::from(camera_pos),
-            Vec3::from(scene.bounds.center),
+            Vec3A::from(camera_pos),
+            Vec3A::from(scene.bounds.center),
             std::f32::consts::PI / 4.0,
             WIDTH as f32,
             HEIGHT as f32,
@@ -437,7 +437,7 @@ impl App {
                 let camera = &mut render_state.camera;
 
                 // Handle keyboard input for camera movement
-                let mut move_dir = Vec3::ZERO;
+                let mut move_dir = Vec3A::ZERO;
 
                 if self.input_state.is_key_down(KeyCode::KeyW) {
                     move_dir.z -= 1.0; // Forward (negative Z in camera space)

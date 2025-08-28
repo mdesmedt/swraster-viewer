@@ -1,9 +1,9 @@
-use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 use gltf::camera::Projection;
 use std::f32::consts::PI;
 
 pub struct RenderCamera {
-    pub position: Vec3,
+    pub position: Vec3A,
     fov: f32,
     pub width: f32,
     pub height: f32,
@@ -18,11 +18,11 @@ pub struct RenderCamera {
     pub view_project_matrix: Mat4,
     pub inverse_view_project_matrix: Mat4,
     pub view_clip_planes: [Vec4; 6],
-    pub view_normal: Vec3,
+    pub view_normal: Vec3A,
 }
 
 impl RenderCamera {
-    pub fn new(position: Vec3, look_at: Vec3, fov: f32, width: f32, height: f32) -> Self {
+    pub fn new(position: Vec3A, look_at: Vec3A, fov: f32, width: f32, height: f32) -> Self {
         // Calculate the forward direction (from position to look_at)
         let forward = (look_at - position).normalize();
 
@@ -45,7 +45,7 @@ impl RenderCamera {
             view_project_matrix: Mat4::IDENTITY,
             inverse_view_project_matrix: Mat4::IDENTITY,
             view_clip_planes: [Vec4::ZERO; 6],
-            view_normal: Vec3::ZERO,
+            view_normal: Vec3A::ZERO,
         }
     }
 
@@ -53,8 +53,8 @@ impl RenderCamera {
         match camera.projection() {
             Projection::Perspective(perspective) => {
                 let fov = perspective.yfov();
-                let position = Vec3::new(0.0, 0.0, 5.0); // Default position, should be set by node transform
-                let look_at = Vec3::new(0.0, 0.0, 0.0); // Default look at, should be set by node transform
+                let position = Vec3A::new(0.0, 0.0, 5.0); // Default position, should be set by node transform
+                let look_at = Vec3A::new(0.0, 0.0, 0.0); // Default look at, should be set by node transform
 
                 Some(Self::new(position, look_at, fov, width, height))
             }
@@ -68,7 +68,7 @@ impl RenderCamera {
         self.view_project_matrix = self.projection_matrix * self.view_matrix;
         self.inverse_view_project_matrix = self.view_project_matrix.inverse();
         self.view_clip_planes = self.compute_view_clip_planes();
-        self.view_normal = self.get_rotation().conjugate() * Vec3::new(0.0, 0.0, 1.0);
+        self.view_normal = self.get_rotation().conjugate() * Vec3A::new(0.0, 0.0, 1.0);
     }
 
     fn compute_view_matrix(&self) -> Mat4 {
@@ -76,7 +76,7 @@ impl RenderCamera {
         let rotation_matrix: Mat4 = Mat4::from_quat(self.get_rotation());
 
         // Create translation matrix
-        let translation_matrix = Mat4::from_translation(-self.position);
+        let translation_matrix = Mat4::from_translation(Vec3::from(-self.position));
 
         rotation_matrix * translation_matrix
     }
@@ -85,7 +85,7 @@ impl RenderCamera {
         Mat4::perspective_rh(self.fov, self.width / self.height, self.near, self.far)
     }
 
-    pub fn move_relative(&mut self, direction: Vec3, magnitude: f32) {
+    pub fn move_relative(&mut self, direction: Vec3A, magnitude: f32) {
         // Get rotation quaternion
         let rotation = self.get_rotation();
 

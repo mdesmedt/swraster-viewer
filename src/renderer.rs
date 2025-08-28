@@ -2,7 +2,7 @@ use crate::bumpqueue::{BumpPool, BumpQueue};
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
 use crate::tilerasterizer::*;
-use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec4};
+use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3A, Vec4};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -33,9 +33,9 @@ pub struct RenderBuffer<'a> {
 #[derive(Copy, Clone)]
 pub struct Vertex {
     pub pos_clip: Vec4,
-    pub pos_world: Vec3,
-    pub normal: Vec3,
-    pub tangent: Vec3,
+    pub pos_world: Vec3A,
+    pub normal: Vec3A,
+    pub tangent: Vec3A,
     pub uv: Vec2,
 }
 
@@ -43,9 +43,9 @@ impl Vertex {
     pub fn new_empty() -> Self {
         Self {
             pos_clip: Vec4::ZERO,
-            pos_world: Vec3::ZERO,
-            normal: Vec3::ZERO,
-            tangent: Vec3::ZERO,
+            pos_world: Vec3A::ZERO,
+            normal: Vec3A::ZERO,
+            tangent: Vec3A::ZERO,
             uv: Vec2::ZERO,
         }
     }
@@ -67,10 +67,10 @@ pub struct RasterPacket {
     pub z_over_w: [f32; 3],
     pub one_over_area: f32,
     pub one_over_w: [f32; 3],
-    pub normals: [Vec3; 3],
-    pub tangents: [Vec3; 3],
+    pub normals: [Vec3A; 3],
+    pub tangents: [Vec3A; 3],
     pub uv_over_w: [Vec2; 3],
-    pub pos_world_over_w: [Vec3; 3],
+    pub pos_world_over_w: [Vec3A; 3],
     pub mesh_index: u32,
     pub primitive_index: u32,
     pub avg_z: OrderedFloat<f32>,
@@ -411,14 +411,14 @@ impl Renderer {
                 let local2 = positions[i2];
 
                 // Compute world space positions
-                let world0 = model_matrix * local0.extend(1.0);
-                let world1 = model_matrix * local1.extend(1.0);
-                let world2 = model_matrix * local2.extend(1.0);
+                let world0 = model_matrix * local0;
+                let world1 = model_matrix * local1;
+                let world2 = model_matrix * local2;
 
                 // Project vertices to clip space
-                let clip0 = mvp_matrix * local0.extend(1.0);
-                let clip1 = mvp_matrix * local1.extend(1.0);
-                let clip2 = mvp_matrix * local2.extend(1.0);
+                let clip0 = mvp_matrix * local0;
+                let clip1 = mvp_matrix * local1;
+                let clip2 = mvp_matrix * local2;
 
                 // Rotate normals to world space (assume uniform scaling)
                 let normal_world0 = rotation_matrix * normals[i0];
@@ -434,21 +434,21 @@ impl Renderer {
                     vertices: [
                         Vertex {
                             pos_clip: clip0,
-                            pos_world: world0.truncate(),
+                            pos_world: Vec3A::from_vec4(world0),
                             normal: normal_world0,
                             tangent: tangent_world0,
                             uv: texcoords[i0],
                         },
                         Vertex {
                             pos_clip: clip1,
-                            pos_world: world1.truncate(),
+                            pos_world: Vec3A::from_vec4(world1),
                             normal: normal_world1,
                             tangent: tangent_world1,
                             uv: texcoords[i1],
                         },
                         Vertex {
                             pos_clip: clip2,
-                            pos_world: world2.truncate(),
+                            pos_world: Vec3A::from_vec4(world2),
                             normal: normal_world2,
                             tangent: tangent_world2,
                             uv: texcoords[i2],

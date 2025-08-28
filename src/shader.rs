@@ -206,7 +206,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
     let diffuse = n_dot_l.clamp(Vec4::ZERO, Vec4::ONE);
 
     // Compute the view direction for each pixel
-    let view_dir = Vec3x4::from_vec3(camera.position) - pos_world;
+    let view_dir = Vec3x4::from_vec3a(camera.position) - pos_world;
     let view_normal = view_dir.normalize();
     // Compute half vector
     let half_vector_add = light_dir + view_normal;

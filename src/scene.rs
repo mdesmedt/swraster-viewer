@@ -26,14 +26,14 @@ impl Error for SceneError {}
 pub type SceneResult<T> = Result<T, SceneError>;
 
 pub struct BoundingSphere {
-    pub center: Vec3,
+    pub center: Vec3A,
     pub radius: f32,
 }
 
 impl BoundingSphere {
     pub fn new() -> Self {
         Self {
-            center: Vec3::ZERO,
+            center: Vec3A::ZERO,
             radius: 0.0,
         }
     }
@@ -53,7 +53,7 @@ impl std::ops::Mul<&BoundingSphere> for Mat4 {
     fn mul(self, sphere: &BoundingSphere) -> Self::Output {
         let max_scale = (self.x_axis.length() + self.y_axis.length() + self.z_axis.length()) / 3.0;
         BoundingSphere {
-            center: self.transform_point3(sphere.center),
+            center: self.transform_point3a(sphere.center),
             radius: sphere.radius * max_scale,
         }
     }
@@ -86,9 +86,9 @@ pub struct Mesh {
 }
 
 pub struct Primitive {
-    pub positions: Vec<Vec3>,
-    pub normals: Vec<Vec3>,
-    pub tangents: Vec<Vec3>,
+    pub positions: Vec<Vec4>,
+    pub normals: Vec<Vec3A>,
+    pub tangents: Vec<Vec3A>,
     pub texcoords: Vec<Vec2>,
     pub indices: Vec<u32>,
     pub material_index: usize,
@@ -310,7 +310,7 @@ impl Scene {
 impl Node {
     fn from_gltf(node: &gltf::Node, transform: Mat4) -> SceneResult<Self> {
         let mut bounding_sphere = BoundingSphere::new();
-        bounding_sphere.center = (transform * Vec4::new(0.0, 0.0, 0.0, 1.0)).truncate();
+        bounding_sphere.center = Vec3A::from_vec4(transform * Vec4::new(0.0, 0.0, 0.0, 1.0));
         Ok(Node {
             name: node.name().map(String::from),
             transform,
@@ -367,10 +367,10 @@ impl Primitive {
     fn from_gltf(primitive: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> SceneResult<Self> {
         let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()].0));
 
-        let positions: Vec<Vec3> = reader
+        let positions: Vec<Vec4> = reader
             .read_positions()
             .ok_or_else(|| SceneError::MissingData("No positions in primitive".into()))?
-            .map(|p| Vec3::new(p[0], p[1], p[2]))
+            .map(|p| Vec4::new(p[0], p[1], p[2], 1.0))
             .collect();
 
         let indices: Vec<u32> = reader
@@ -379,16 +379,18 @@ impl Primitive {
             .into_u32()
             .collect();
 
-        let normals: Vec<Vec3> = if let Some(file_normals) = reader.read_normals() {
-            file_normals.map(|n| Vec3::new(n[0], n[1], n[2])).collect()
+        let normals: Vec<Vec3A> = if let Some(file_normals) = reader.read_normals() {
+            file_normals.map(|n| Vec3A::new(n[0], n[1], n[2])).collect()
         } else {
             // Compute smooth normals automatically when they're missing
             println!("Computing automatic vertex normals");
             compute_smooth_normals(&positions, &indices)
         };
 
-        let tangents: Vec<Vec3> = if let Some(file_tangents) = reader.read_tangents() {
-            file_tangents.map(|t| Vec3::new(t[0], t[1], t[2])).collect()
+        let tangents: Vec<Vec3A> = if let Some(file_tangents) = reader.read_tangents() {
+            file_tangents
+                .map(|t| Vec3A::new(t[0], t[1], t[2]))
+                .collect()
         } else {
             // Just clone the normals as tangents, without normal mapping it doesn't matter anyway
             normals.clone()
@@ -419,13 +421,13 @@ impl Primitive {
     }
 }
 
-fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
+fn compute_bounding_sphere(positions: &[Vec4]) -> BoundingSphere {
+    let mut min = Vec3A::splat(f32::INFINITY);
+    let mut max = Vec3A::splat(f32::NEG_INFINITY);
 
     for position in positions {
-        min = min.min(*position);
-        max = max.max(*position);
+        min = min.min(Vec3A::from_vec4(*position));
+        max = max.max(Vec3A::from_vec4(*position));
     }
 
     let center = min.midpoint(max);
@@ -434,8 +436,8 @@ fn compute_bounding_sphere(positions: &[Vec3]) -> BoundingSphere {
     BoundingSphere { center, radius }
 }
 
-fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
-    let mut normals = vec![Vec3::ZERO; positions.len()];
+fn compute_smooth_normals(positions: &[Vec4], indices: &[u32]) -> Vec<Vec3A> {
+    let mut normals = vec![Vec3A::ZERO; positions.len()];
 
     // Compute face normals and accumulate them at each vertex
     for triangle in indices.chunks_exact(3) {
@@ -444,8 +446,8 @@ fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
         let v2 = positions[triangle[2] as usize];
 
         // Compute face normal
-        let edge1 = v1 - v0;
-        let edge2 = v2 - v0;
+        let edge1 = Vec3A::from_vec4(v1 - v0);
+        let edge2 = Vec3A::from_vec4(v2 - v0);
         let face_normal = edge1.cross(edge2);
 
         // Accumulate face normal at each vertex of the triangle
@@ -460,7 +462,7 @@ fn compute_smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
             *normal = normal.normalize();
         } else {
             // Fallback for vertices with no connected faces
-            *normal = Vec3::new(0.0, 0.0, 1.0);
+            *normal = Vec3A::new(0.0, 0.0, 1.0);
         }
     }
 
