@@ -7,7 +7,11 @@ use crate::shader::{
     pbr_shader, PbrShaderParams, RasterizerShader, RasterizerShaderParams,
     TranslucentForwardShader, VBufferOpaqueShader,
 };
-use glam::{BVec4, BVec4A, IVec2, UVec4, Vec4};
+use glam::{BVec4A, IVec2, UVec4, Vec4};
+
+pub const SUBPIXEL_SCALE: i32 = 16;
+pub const SUBPIXEL_SCALE_F: f32 = 16.0;
+pub const SUBPIXEL_SHIFT: i32 = 4;
 
 // The tile which the rasterizer uses to consume work
 // NOTE: The color and depth values are stored using SIMD vectors
@@ -65,9 +69,18 @@ impl TileRasterizer {
         packet: &RasterPacket,
         shader: &S,
     ) {
-        let x_start = packet.screen_min.x & !1; // Align to quads
-        let y_start = packet.screen_min.y & !1;
-        let mut p = IVec2::new(x_start, y_start);
+        const HALF_PIXEL: i32 = SUBPIXEL_SCALE / 2;
+        const ONE_HALF_PIXEL: i32 = SUBPIXEL_SCALE + HALF_PIXEL;
+
+        let x_start_pixels = packet.screen_min_pixels.x & !1; // Align to quads
+        let y_start_pixels = packet.screen_min_pixels.y & !1;
+
+        let x_start_subpixels = x_start_pixels * SUBPIXEL_SCALE;
+        let y_start_subpixels = y_start_pixels * SUBPIXEL_SCALE;
+        let x_end_subpixels = packet.screen_max_pixels.x * SUBPIXEL_SCALE;
+        let y_end_subpixels = packet.screen_max_pixels.y * SUBPIXEL_SCALE;
+
+        let mut p = IVec2::new(x_start_subpixels, y_start_subpixels);
 
         // Fetch the light
         let light = &scene.light;
@@ -85,68 +98,79 @@ impl TileRasterizer {
         let material = &scene.materials[material_index];
 
         // Get triangle vertices in screen space
-        let p0 = packet.pos_screen[0];
-        let p1 = packet.pos_screen[1];
-        let p2 = packet.pos_screen[2];
+        let p0 = packet.pos_screen_subpixels[0];
+        let p1 = packet.pos_screen_subpixels[1];
+        let p2 = packet.pos_screen_subpixels[2];
 
         let one_over_area_vec = Vec4::splat(packet.one_over_area);
 
         // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
+        fn top_left_bias(a: i32, b: i32) -> i32 {
+            if a < 0 || (a == 0 && b > 0) {
+                0
+            } else {
+                HALF_PIXEL
+            }
+        }
+
         // Edge v0->v1: (y1-y0)x + (x0-x1)y + (x1*y0 - x0*y1) = 0
         let a01 = p1.y - p0.y;
         let b01 = p0.x - p1.x;
-        let c01 = p1.x * p0.y - p0.x * p1.y;
+        let c01 = p1.x * p0.y - p0.x * p1.y + top_left_bias(a01, b01);
 
         // Edge v1->v2: (y2-y1)x + (x1-x2)y + (x2*y1 - x1*y2) = 0
         let a12 = p2.y - p1.y;
         let b12 = p1.x - p2.x;
-        let c12 = p2.x * p1.y - p1.x * p2.y;
+        let c12 = p2.x * p1.y - p1.x * p2.y + top_left_bias(a12, b12);
 
         // Edge v2->v0: (y0-y2)x + (x2-x0)y + (x0*y2 - x2*y0) = 0
         let a20 = p0.y - p2.y;
         let b20 = p2.x - p0.x;
-        let c20 = p0.x * p2.y - p2.x * p0.y;
+        let c20 = p0.x * p2.y - p2.x * p0.y + top_left_bias(a20, b20);
 
         // Step deltas for 4-pixel SIMD stepping
-        const STEP_X_SIZE: i32 = 2;
-        const STEP_Y_SIZE: i32 = 2;
+        const STEP_X_SIZE: i32 = 2 * SUBPIXEL_SCALE;
+        const STEP_Y_SIZE: i32 = 2 * SUBPIXEL_SCALE;
 
-        let step_x01 = Vec4::splat(a01 * STEP_X_SIZE as f32);
-        let step_x12 = Vec4::splat(a12 * STEP_X_SIZE as f32);
-        let step_x20 = Vec4::splat(a20 * STEP_X_SIZE as f32);
+        let step_x01 = Vec4::splat((a01 * STEP_X_SIZE) as f32);
+        let step_x12 = Vec4::splat((a12 * STEP_X_SIZE) as f32);
+        let step_x20 = Vec4::splat((a20 * STEP_X_SIZE) as f32);
 
-        let step_y01 = Vec4::splat(b01 * STEP_Y_SIZE as f32);
-        let step_y12 = Vec4::splat(b12 * STEP_Y_SIZE as f32);
-        let step_y20 = Vec4::splat(b20 * STEP_Y_SIZE as f32);
+        let step_y01 = Vec4::splat((b01 * STEP_Y_SIZE) as f32);
+        let step_y12 = Vec4::splat((b12 * STEP_Y_SIZE) as f32);
+        let step_y20 = Vec4::splat((b20 * STEP_Y_SIZE) as f32);
 
         // Initial edge function values at the starting pixel block with half-pixel offset
         let x = Vec4::new(
-            p.x as f32 + 0.5,
-            p.x as f32 + 1.5,
-            p.x as f32 + 0.5,
-            p.x as f32 + 1.5,
+            (p.x + HALF_PIXEL) as f32,
+            (p.x + ONE_HALF_PIXEL) as f32,
+            (p.x + HALF_PIXEL) as f32,
+            (p.x + ONE_HALF_PIXEL) as f32,
         );
         let y = Vec4::new(
-            p.y as f32 + 0.5,
-            p.y as f32 + 0.5,
-            p.y as f32 + 1.5,
-            p.y as f32 + 1.5,
+            (p.y + HALF_PIXEL) as f32,
+            (p.y + HALF_PIXEL) as f32,
+            (p.y + ONE_HALF_PIXEL) as f32,
+            (p.y + ONE_HALF_PIXEL) as f32,
         );
 
         // Edge function values: w0 = edge v1->v2, w1 = edge v2->v0, w2 = edge v0->v1
-        let mut w0_row = Vec4::splat(a12) * x + Vec4::splat(b12) * y + Vec4::splat(c12);
-        let mut w1_row = Vec4::splat(a20) * x + Vec4::splat(b20) * y + Vec4::splat(c20);
-        let mut w2_row = Vec4::splat(a01) * x + Vec4::splat(b01) * y + Vec4::splat(c01);
+        let mut w0_row =
+            Vec4::splat(a12 as f32) * x + Vec4::splat(b12 as f32) * y + Vec4::splat(c12 as f32);
+        let mut w1_row =
+            Vec4::splat(a20 as f32) * x + Vec4::splat(b20 as f32) * y + Vec4::splat(c20 as f32);
+        let mut w2_row =
+            Vec4::splat(a01 as f32) * x + Vec4::splat(b01 as f32) * y + Vec4::splat(c01 as f32);
 
         // Main loop for rasterizing the triangle
-        while p.y < packet.screen_max.y {
+        while p.y < y_end_subpixels {
             let mut w0 = w0_row;
             let mut w1 = w1_row;
             let mut w2 = w2_row;
 
-            p.x = x_start;
-            while p.x < packet.screen_max.x {
+            p.x = x_start_subpixels;
+            while p.x < x_end_subpixels {
                 // Test if any pixels are inside the triangle
                 let mask = w0.cmpge(Vec4::ZERO) & w1.cmpge(Vec4::ZERO) & w2.cmpge(Vec4::ZERO);
                 if mask.any() {
@@ -175,28 +199,32 @@ impl TileRasterizer {
                         bary2,
                     ) * w;
 
+                    let pixel = p >> SUBPIXEL_SHIFT;
+
                     // Perform depth test
-                    let (depth, mask) = self.depth_test(p.x, p.y, z, mask);
+                    let (depth, mask) = self.depth_test(pixel, z, mask);
 
-                    let shading_params = RasterizerShaderParams {
-                        index_in_tile: self.index_from_xy(p.x, p.y),
-                        packet_index: packet_index,
-                        z,
-                        w,
-                        bary0,
-                        bary1,
-                        bary2,
-                        mask,
-                        depth_from_depth_test: depth,
-                        light_dir,
-                        packet: packet,
-                        material,
-                        camera,
-                        scene,
-                    };
+                    if mask.any() {
+                        let shading_params = RasterizerShaderParams {
+                            index_in_tile: self.index_from_xy(pixel),
+                            packet_index,
+                            z,
+                            w,
+                            bary0,
+                            bary1,
+                            bary2,
+                            mask,
+                            depth_from_depth_test: depth,
+                            light_dir,
+                            packet,
+                            material,
+                            camera,
+                            scene,
+                        };
 
-                    // Execute shader
-                    shader.shade(shading_params, self);
+                        // Execute shader
+                        shader.shade(shading_params, self);
+                    }
                 }
 
                 // Step in X
@@ -230,10 +258,11 @@ impl TileRasterizer {
         for y in 0..tile_height / 2 {
             let screen_y = self.screen_min.y + (y as i32) * 2;
 
-            // Loop over Vec4s in the row
+            // Loop over each quad in the row
             for quad_x in 0..width_quads {
                 let screen_x = self.screen_min.x + (quad_x as i32 * 2);
-                let index = self.index_from_xy(screen_x, screen_y);
+                let pixel = IVec2::new(screen_x, screen_y);
+                let index = self.index_from_xy(pixel);
 
                 let packet_index_vec = self.packet_index[index];
 
@@ -340,15 +369,15 @@ impl TileRasterizer {
                     out_color = UVec4::select(depth_mask_bvec4, out_color, color);
                 }
 
-                let index = self.index_from_xy(screen_x, screen_y);
+                // Write color to the tile's color buffer
                 self.color[index] = out_color;
             }
         }
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
-    fn depth_test(&mut self, x: i32, y: i32, depth: Vec4, mask: BVec4A) -> (Vec4, BVec4A) {
-        let index = self.index_from_xy(x, y);
+    fn depth_test(&mut self, pixel: IVec2, depth: Vec4, mask: BVec4A) -> (Vec4, BVec4A) {
+        let index = self.index_from_xy(pixel);
         // Load current depth values
         let current_depth = self.depth[index];
         // Perform depth test
@@ -361,39 +390,23 @@ impl TileRasterizer {
         (final_depth, final_mask)
     }
 
-    fn write_pixels(&mut self, x: i32, y: i32, color: UVec4, final_mask: BVec4A) {
-        let index = self.index_from_xy(x, y);
-        let booleans: [bool; 4] = final_mask.into();
-        let mask_bvec4 = BVec4::from(booleans);
-
-        // Select final color
-        let current_color = self.color[index];
-        let final_color = UVec4::select(mask_bvec4, color, current_color);
-
-        // Write color
-        self.color[index] = final_color;
-    }
-
-    pub fn index_from_xy(&self, x: i32, y: i32) -> usize {
+    pub fn index_from_xy(&self, pixel: IVec2) -> usize {
         debug_assert!(
-            (x - self.screen_min.x) % 2 == 0 || (x - self.screen_min.x) % 2 == 1,
+            pixel.x >= 0 && pixel.x < self.screen_max.x,
             "x within bounds"
         );
         debug_assert!(
-            (y - self.screen_min.y) % 2 == 0 || (y - self.screen_min.y) % 2 == 1,
+            pixel.y >= 0 && pixel.y < self.screen_max.y,
             "y within bounds"
         );
 
-        let local_x = x - self.screen_min.x;
-        let local_y = y - self.screen_min.y;
+        let local = pixel - self.screen_min;
+        let quad = local / 2;
 
         let width = self.screen_max.x - self.screen_min.x;
         let width_quads = width / 2;
 
-        let quad_x = local_x / 2;
-        let quad_y = local_y / 2;
-
-        let index = quad_y * width_quads + quad_x;
+        let index = quad.y * width_quads + quad.x;
         index as usize
     }
 }

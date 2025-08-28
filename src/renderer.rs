@@ -1,7 +1,7 @@
 use crate::bumpqueue::{BumpPool, BumpQueue};
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Scene};
-use crate::tilerasterizer::TileRasterizer;
+use crate::tilerasterizer::*;
 use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3, Vec4};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
@@ -61,18 +61,18 @@ pub struct Triangle {
 // A packet containing a triangle sent from the clipper to the rasterizer for a tile
 #[derive(Clone, Copy)]
 pub struct RasterPacket {
-    pub screen_min: IVec2,
-    pub screen_max: IVec2,
-    pub pos_screen: [Vec2; 3],
+    pub screen_min_pixels: IVec2,
+    pub screen_max_pixels: IVec2,
+    pub pos_screen_subpixels: [IVec2; 3],
     pub z_over_w: [f32; 3],
     pub one_over_area: f32,
     pub one_over_w: [f32; 3],
-    pub primitive_index: u32,
     pub normals: [Vec3; 3],
     pub tangents: [Vec3; 3],
     pub uv_over_w: [Vec2; 3],
     pub pos_world_over_w: [Vec3; 3],
     pub mesh_index: u32,
+    pub primitive_index: u32,
     pub avg_z: OrderedFloat<f32>,
     pub du_dv: Vec4,
 }
@@ -145,7 +145,12 @@ fn test_sphere_frustum(sphere: &BoundingSphere, camera: &RenderCamera) -> bool {
 // Renderer which manages clipping, culling, binning and rasterization
 pub struct Renderer {
     width: i32,
+    #[allow(dead_code)]
     height: i32,
+    width_subpixels: i32,
+    height_subpixels: i32,
+    width_f: f32,
+    height_f: f32,
     tiles: Vec<TileRasterizer>,
     nodes_by_distance: Vec<usize>,
     timer_clipbin: Duration,
@@ -174,6 +179,10 @@ impl Renderer {
         Self {
             width,
             height,
+            width_subpixels: width * SUBPIXEL_SCALE,
+            height_subpixels: height * SUBPIXEL_SCALE,
+            width_f: width as f32,
+            height_f: height as f32,
             tiles,
             nodes_by_distance: Vec::new(),
             timer_clipbin: Duration::ZERO,
@@ -291,7 +300,7 @@ impl Renderer {
         self.nodes_by_distance.sort_by_key(|&i| {
             let node = &scene.nodes[i];
             let bounding_sphere = &node.bounding_sphere_world;
-            let distance = (camera.position - bounding_sphere.center).length();
+            let distance = (camera.position - bounding_sphere.center).length_squared();
             OrderedFloat(distance)
         });
     }
@@ -549,9 +558,9 @@ impl Renderer {
     // Projects a triangle to screen space and bins it into tiles
     fn bin_triangle<const MODE_OPAQUE: bool>(&self, triangle: Triangle) {
         // Compute the screen space bounding box of the triangle
-        let p0 = self.clip_to_screen(triangle.vertices[0].pos_clip);
-        let p1 = self.clip_to_screen(triangle.vertices[1].pos_clip);
-        let p2 = self.clip_to_screen(triangle.vertices[2].pos_clip);
+        let p0 = self.clip_to_screen_subpixels(triangle.vertices[0].pos_clip);
+        let p1 = self.clip_to_screen_subpixels(triangle.vertices[1].pos_clip);
+        let p2 = self.clip_to_screen_subpixels(triangle.vertices[2].pos_clip);
 
         // NOTE: At this point triangles are CW front-facing because of screen coordinate conversion
         // TODO: Just figure out how to keep CCW facing triangles in screen space and deal with it
@@ -560,7 +569,7 @@ impl Renderer {
         let signed_area = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
 
         // Backface culling
-        if signed_area > 0.0 {
+        if signed_area > 0 {
             return;
         }
 
@@ -572,8 +581,7 @@ impl Renderer {
             1.0 / triangle.vertices[2].pos_clip.w,
         ];
 
-        // TODO: Flip signed area because of screen space flip
-        let one_over_area = -(1.0 / signed_area);
+        let one_over_area = 1.0 / (signed_area.abs() as f32);
 
         let z_over_w = [
             triangle.vertices[0].pos_clip.z * one_over_w[0],
@@ -605,10 +613,10 @@ impl Renderer {
         ];
 
         // Compute uv derivatives for texture mapping during shading
-        let dx1 = p1.x - p0.x;
-        let dx2 = p2.x - p0.x;
-        let dy1 = p1.y - p0.y;
-        let dy2 = p2.y - p0.y;
+        let dx1 = (p1.x - p0.x) as f32;
+        let dx2 = (p2.x - p0.x) as f32;
+        let dy1 = (p1.y - p0.y) as f32;
+        let dy2 = (p2.y - p0.y) as f32;
         let uv0 = uv_over_w[0];
         let uv1 = uv_over_w[1];
         let uv2 = uv_over_w[2];
@@ -623,31 +631,37 @@ impl Renderer {
         let du_dv = Vec4::new(du_dx, du_dy, dv_dx, dv_dy) * Vec4::splat(one_over_area);
 
         // Compute triangle bounding box
-        let screen_min: IVec2 = IVec2::new(
-            p0.x.min(p1.x).min(p2.x).max(0.0).floor() as i32,
-            p0.y.min(p1.y).min(p2.y).max(0.0).floor() as i32,
+        let screen_min_subpixels: IVec2 = IVec2::new(
+            p0.x.min(p1.x).min(p2.x).max(0),
+            p0.y.min(p1.y).min(p2.y).max(0),
         );
-        let screen_max: IVec2 = IVec2::new(
-            p0.x.max(p1.x).max(p2.x).min(self.width as f32).ceil() as i32,
-            p0.y.max(p1.y).max(p2.y).min(self.height as f32).ceil() as i32,
+        let screen_max_subpixels: IVec2 = IVec2::new(
+            p0.x.max(p1.x).max(p2.x).min(self.width_subpixels),
+            p0.y.max(p1.y).max(p2.y).min(self.height_subpixels),
         );
+        let screen_min_pixels = screen_min_subpixels >> SUBPIXEL_SHIFT;
+        let screen_max_pixels = (screen_max_subpixels + SUBPIXEL_SCALE - 1) >> SUBPIXEL_SHIFT;
 
         // Calculate which bins intersect with the triangle's bounding box
-        let min_bin_x = screen_min.x / TILE_SIZE;
-        let min_bin_y = screen_min.y / TILE_SIZE;
-        let max_bin_x = (screen_max.x + TILE_SIZE - 1) / TILE_SIZE;
-        let max_bin_y = (screen_max.y + TILE_SIZE - 1) / TILE_SIZE;
+        let min_bin_x = screen_min_pixels.x / TILE_SIZE;
+        let min_bin_y = screen_min_pixels.y / TILE_SIZE;
+        let max_bin_x = (screen_max_pixels.x + TILE_SIZE - 1) / TILE_SIZE;
+        let max_bin_y = (screen_max_pixels.y + TILE_SIZE - 1) / TILE_SIZE;
 
         // Calculate number of bins in x direction
         let bins_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
 
-        // Compute average z
-        let avg_z = OrderedFloat(
-            (triangle.vertices[0].pos_clip.z
-                + triangle.vertices[1].pos_clip.z
-                + triangle.vertices[2].pos_clip.z)
-                / 3.0,
-        );
+        // Compute average z for translucency sorting later
+        let avg_z = if !MODE_OPAQUE {
+            OrderedFloat(
+                (triangle.vertices[0].pos_clip.z
+                    + triangle.vertices[1].pos_clip.z
+                    + triangle.vertices[2].pos_clip.z)
+                    / 3.0,
+            )
+        } else {
+            OrderedFloat(0.0)
+        };
 
         // Send the packet to all intersecting bins
         for y in min_bin_y..max_bin_y {
@@ -658,19 +672,19 @@ impl Renderer {
 
                     // Clip the triangle bounds to this tile's bounds
                     let tile_clipped_min = IVec2::new(
-                        screen_min.x.max(tile.screen_min.x),
-                        screen_min.y.max(tile.screen_min.y),
+                        screen_min_pixels.x.max(tile.screen_min.x),
+                        screen_min_pixels.y.max(tile.screen_min.y),
                     );
                     let tile_clipped_max = IVec2::new(
-                        screen_max.x.min(tile.screen_max.x),
-                        screen_max.y.min(tile.screen_max.y),
+                        screen_max_pixels.x.min(tile.screen_max.x),
+                        screen_max_pixels.y.min(tile.screen_max.y),
                     );
 
                     // Create a RasterPacket clipped to the tile
                     let packet = RasterPacket {
-                        screen_min: tile_clipped_min,
-                        screen_max: tile_clipped_max,
-                        pos_screen: [p0, p1, p2],
+                        screen_min_pixels: tile_clipped_min,
+                        screen_max_pixels: tile_clipped_max,
+                        pos_screen_subpixels: [p0, p1, p2],
                         z_over_w: z_over_w,
                         one_over_w: one_over_w,
                         normals: normals,
@@ -695,14 +709,17 @@ impl Renderer {
     }
 
     // Computes the 2D screen positions for a clip space vertex
-    fn clip_to_screen(&self, vertex: Vec4) -> Vec2 {
+    fn clip_to_screen_subpixels(&self, vertex: Vec4) -> IVec2 {
         // Perform perspective divide
-        let ndc = Vec2::new(vertex.x / vertex.w, vertex.y / vertex.w);
+        let ndc = vertex / vertex.w;
 
         // Convert to screen coordinates
-        let screen_x = (ndc.x + 1.0) * self.width as f32 / 2.0;
-        let screen_y = (1.0 - ndc.y) * self.height as f32 / 2.0;
+        let screen_x = (ndc.x + 1.0) * self.width_f / 2.0;
+        let screen_y = (1.0 - ndc.y) * self.height_f / 2.0;
 
-        Vec2::new(screen_x, screen_y)
+        IVec2::new(
+            (screen_x * SUBPIXEL_SCALE_F).round() as i32,
+            (screen_y * SUBPIXEL_SCALE_F).round() as i32,
+        )
     }
 }
