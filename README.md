@@ -1,7 +1,7 @@
 # swraster-viewer
-Simple software rasterizer which views GLTF files, written in Rust.
+Software rasterizer which views GLTF files, written in Rust.
 
-![Screenshot](https://github.com/user-attachments/assets/34c07f66-7047-4191-82eb-e3a47c433d92)
+![Screenshot](https://github.com/user-attachments/assets/782835fb-82a6-484c-a4f6-756df5e51ab6)
 
 The project has been tested with the assets from the glTF-Sample-Assets repository: https://github.com/KhronosGroup/glTF-Sample-Assets
 
@@ -23,8 +23,9 @@ With this project I tried to make a relatively simple, relatively performant sof
 The general architecture of the rasterizer is:
 - Load a glTF scene with the `gltf` crate.
 - Iterate over nodes/meshes/primitives in parallel with `rayon`.
-- Project each triangle into clip space, clip against the frustum, and bin the resulting triangles into screen space tiles, using a pooled segmented queue.
-- Every screen space tile runs in a thread and uses SIMD (`glam`) to edge test, shade and depth test 4 pixels at a time.
+- Project each triangle into clip space, clip against the frustum, and bin the resulting triangles into screen space tiles, using a segmented queue.
+- Every screen space tile runs in a thread and uses SIMD (`glam`) to rasterize 4 pixels at a time, writing into a visibility buffer.
+- Every tile then shades the visbility buffer with SIMD.
 - After all triangles have been processed the tiles are copied into a linear color buffer which is viewed with `pixels`.
 
 Thanks to Fabian “ryg” Giesen for his helpful software rasterizer tutorial series: https://fgiesen.wordpress.com/2013/02/17/optimizing-sw-occlusion-culling-index/
