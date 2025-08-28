@@ -1,14 +1,22 @@
 use crate::math::*;
-use glam::{Mat4, Vec4};
+use glam::{Mat4, Vec3A, Vec4};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::scene::{SceneError, SceneResult};
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum TextureType {
+    Color,
+    Normal,
+    Cubemap,
+}
+
 pub struct Texture {
     pub width: u32,
     pub height: u32,
     pub width_height_vec: Vec4,
+    pub texture_type: TextureType,
     pub data: Vec<Vec4>, // Vec4 floating point data
     pub max_mip_level: u32,
     pub mip_offsets: Vec<usize>,
@@ -48,7 +56,19 @@ impl Texture {
                     let p01 = self.data[prev_offset + (y1 * prev_width + x0) as usize];
                     let p11 = self.data[prev_offset + (y1 * prev_width + x1) as usize];
 
-                    let avg = (p00 + p10 + p01 + p11) / 4.0;
+                    let mut avg = (p00 + p10 + p01 + p11) / 4.0;
+
+                    // Decode and normalize normal maps instead of using the average
+                    if self.texture_type == TextureType::Normal {
+                        let n00 = Vec3A::from_vec4(p00) * 2.0 - Vec3A::ONE;
+                        let n10 = Vec3A::from_vec4(p10) * 2.0 - Vec3A::ONE;
+                        let n01 = Vec3A::from_vec4(p01) * 2.0 - Vec3A::ONE;
+                        let n11 = Vec3A::from_vec4(p11) * 2.0 - Vec3A::ONE;
+                        let normal = (n00 + n10 + n01 + n11).normalize();
+                        let tangent_space = (normal + Vec3A::ONE) * Vec3A::splat(0.5);
+                        avg = tangent_space.extend(0.0);
+                    }
+
                     self.data.push(avg);
                 }
             }
@@ -281,17 +301,17 @@ impl TextureCache {
         }
     }
 
-    pub fn get_or_create(&mut self, uri: &str) -> Arc<Texture> {
+    pub fn get_or_create(&mut self, uri: &str, texture_type: TextureType) -> Arc<Texture> {
         if let Some(texture) = self.textures.get(uri) {
             Arc::clone(texture)
         } else {
             // Load the texture from file
-            let texture = match self.load_texture(uri) {
+            let texture = match self.load_texture(uri, texture_type) {
                 Ok(tex) => Arc::new(tex),
                 Err(e) => {
                     eprintln!("Failed to load texture '{}': {}", uri, e);
                     // Create a fallback texture (checkerboard pattern)
-                    Arc::new(self.create_fallback_texture())
+                    Arc::new(self.create_fallback_texture(texture_type))
                 }
             };
             self.textures.insert(uri.to_string(), Arc::clone(&texture));
@@ -299,7 +319,7 @@ impl TextureCache {
         }
     }
 
-    fn load_texture(&self, uri: &str) -> SceneResult<Texture> {
+    fn load_texture(&self, uri: &str, texture_type: TextureType) -> SceneResult<Texture> {
         // Construct the full path based on GLTF spec
         let texture_path = if let Some(ref base_dir) = self.base_dir {
             // If URI is absolute (starts with http://, https://, or file://), use as-is
@@ -342,6 +362,7 @@ impl TextureCache {
                         height as f32,
                         height as f32,
                     ),
+                    texture_type,
                     data,
                     max_mip_level: 0,
                     mip_offsets: vec![0],
@@ -364,7 +385,7 @@ impl TextureCache {
         texture
     }
 
-    fn create_fallback_texture(&self) -> Texture {
+    fn create_fallback_texture(&self, texture_type: TextureType) -> Texture {
         // Create a simple checkerboard pattern as fallback
         let width = 64;
         let height = 64;
@@ -383,6 +404,7 @@ impl TextureCache {
             height,
             width_height_vec: Vec4::new(width as f32, width as f32, height as f32, height as f32),
             data,
+            texture_type,
             max_mip_level: 0,
             mip_offsets: vec![0],
             mip_widths: vec![width],

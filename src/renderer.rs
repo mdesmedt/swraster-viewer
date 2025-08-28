@@ -674,7 +674,8 @@ impl Renderer {
         let du_dy = du2 * dx1 - du1 * dx2;
         let dv_dx = dv1 * dy2 - dv2 * dy1;
         let dv_dy = dv2 * dx1 - dv1 * dx2;
-        let du_dv = Vec4::new(du_dx, du_dy, dv_dx, dv_dy) * Vec4::splat(one_over_area * SUBPIXEL_SCALE_F);
+        let du_dv =
+            Vec4::new(du_dx, du_dy, dv_dx, dv_dy) * Vec4::splat(one_over_area * SUBPIXEL_SCALE_F);
 
         // Compute triangle bounding box
         let screen_min_subpixels: IVec2 = IVec2::new(

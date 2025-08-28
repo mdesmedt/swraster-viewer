@@ -142,7 +142,8 @@ impl Scene {
         texture_cache: &mut TextureCache,
         texture_cache_builtin: &mut TextureCache,
     ) -> SceneResult<Self> {
-        let cubemap_texture = texture_cache_builtin.get_or_create("cubemap.jpg");
+        let cubemap_texture =
+            texture_cache_builtin.get_or_create("cubemap.jpg", TextureType::Cubemap);
         let cubemap_sampler = Sampler {
             wrap_s: WrapMode::Repeat,
             wrap_t: WrapMode::Repeat,
@@ -475,10 +476,11 @@ fn get_texture_and_sampler(
     texture_gltf: &gltf::texture::Texture,
     document: &gltf::Document,
     texture_cache: &mut TextureCache,
+    texture_type: TextureType,
 ) -> Option<TextureAndSampler> {
     match texture_gltf.source().source() {
         gltf::image::Source::Uri { uri, .. } => {
-            let texture = texture_cache.get_or_create(uri);
+            let texture = texture_cache.get_or_create(uri, texture_type);
             let sampler = if let Some(sampler_index) = texture_gltf.sampler().index() {
                 // Convert the sampler
                 let gltf_sampler = document.samplers().nth(sampler_index).unwrap();
@@ -536,7 +538,9 @@ impl Material {
         let base_color_texture = material
             .pbr_metallic_roughness()
             .base_color_texture()
-            .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache));
+            .and_then(|tex| {
+                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+            });
         let is_alpha_tested = material.alpha_mode() == gltf::material::AlphaMode::Mask
             && base_color_texture.is_some();
 
@@ -556,21 +560,33 @@ impl Material {
             metallic_roughness_texture: material
                 .pbr_metallic_roughness()
                 .metallic_roughness_texture()
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
-            normal_texture: material
-                .normal_texture()
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
+                .and_then(|tex| {
+                    get_texture_and_sampler(
+                        &tex.texture(),
+                        document,
+                        texture_cache,
+                        TextureType::Color,
+                    )
+                }),
+            normal_texture: material.normal_texture().and_then(|tex| {
+                get_texture_and_sampler(
+                    &tex.texture(),
+                    document,
+                    texture_cache,
+                    TextureType::Normal,
+                )
+            }),
             emissive_factor: Vec3::new(
                 material.emissive_factor()[0],
                 material.emissive_factor()[1],
                 material.emissive_factor()[2],
             ),
-            emissive_texture: material
-                .emissive_texture()
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
-            occlusion_texture: material
-                .occlusion_texture()
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
+            emissive_texture: material.emissive_texture().and_then(|tex| {
+                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+            }),
+            occlusion_texture: material.occlusion_texture().and_then(|tex| {
+                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+            }),
             is_alpha_tested,
             is_translucent,
             alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),
@@ -581,7 +597,14 @@ impl Material {
             transmission_texture: material
                 .transmission()
                 .and_then(|t| t.transmission_texture())
-                .and_then(|tex| get_texture_and_sampler(&tex.texture(), document, texture_cache)),
+                .and_then(|tex| {
+                    get_texture_and_sampler(
+                        &tex.texture(),
+                        document,
+                        texture_cache,
+                        TextureType::Color,
+                    )
+                }),
         })
     }
 }
