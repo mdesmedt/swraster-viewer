@@ -258,7 +258,7 @@ impl TextureAndSampler {
 
         let dx2 = du_dv_tex.x * du_dv_tex.x + du_dv_tex.z * du_dv_tex.z;
         let dy2 = du_dv_tex.y * du_dv_tex.y + du_dv_tex.w * du_dv_tex.w;
-        
+
         // Hack to preserve some sharpness on sloped surfaces
         //let footprint = dx2.max(dy2);
         let footprint = (dx2 + dy2) * 0.5;
@@ -336,7 +336,12 @@ impl TextureCache {
                 Ok(Texture {
                     width,
                     height,
-                    width_height_vec: Vec4::new(width as f32, width as f32, height as f32, height as f32),
+                    width_height_vec: Vec4::new(
+                        width as f32,
+                        width as f32,
+                        height as f32,
+                        height as f32,
+                    ),
                     data,
                     max_mip_level: 0,
                     mip_offsets: vec![0],

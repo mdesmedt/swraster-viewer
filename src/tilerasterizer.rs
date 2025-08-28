@@ -40,9 +40,6 @@ impl TileRasterizer {
         // Shade opaque pixels
         self.shade_vbuffer(scene, camera);
 
-        // Fill unwritten pixels with skybox
-        self.fill_with_skybox(scene, camera);
-
         // Sort translucent packets by z, back to front
         self.packets_translucent
             .sort_by(|a, b| b.avg_z.cmp(&a.avg_z));
@@ -57,77 +54,6 @@ impl TileRasterizer {
         // Reset the queues
         self.packets_opaque.reset();
         self.packets_translucent.reset();
-    }
-
-    /// Fill depth=infinity pixels with skybox color
-    pub fn fill_with_skybox(&mut self, scene: &Scene, camera: &RenderCamera) {
-        let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
-        let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
-        let width_quads = tile_width / 2;
-
-        let inv_viewproj = camera.inverse_view_project_matrix;
-        let inv_viewproj_transposed = inv_viewproj.transpose();
-
-        let rcp_camera_width = Vec4::splat(1.0 / camera.width as f32);
-        let rcp_camera_height = Vec4::splat(1.0 / camera.height as f32);
-
-        // Loop over rows of quads
-        for y in 0..tile_height / 2 {
-            let screen_y = self.screen_min.y + (y as i32) * 2;
-
-            // Loop over Vec4s in the row
-            for quad_x in 0..width_quads {
-                let screen_x = self.screen_min.x + (quad_x as i32 * 2);
-                let index = self.index_from_xy(screen_x, screen_y);
-
-                let depth = self.depth[index];
-                let depth_mask = depth.cmpeq(Vec4::INFINITY);
-                if !depth_mask.any() {
-                    continue;
-                }
-
-                let pixel_x = Vec4::new(
-                    (screen_x as f32) + 0.5,
-                    (screen_x as f32) + 1.5,
-                    (screen_x as f32) + 0.5,
-                    (screen_x as f32) + 1.5,
-                );
-                let pixel_y = Vec4::new(
-                    (screen_y as f32) + 0.5,
-                    (screen_y as f32) + 0.5,
-                    (screen_y as f32) + 1.5,
-                    (screen_y as f32) + 1.5,
-                );
-
-                let ndc_x = pixel_x * rcp_camera_width * 2.0 - Vec4::ONE;
-                let ndc_y = (Vec4::ONE - pixel_y * rcp_camera_height) * 2.0 - Vec4::ONE;
-
-                let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
-
-                // Transform by the transposed inverse view-projection matrix
-                let world_dir =
-                    Vec3x4::transform_direction_transposed(inv_viewproj_transposed, clip_pos);
-                let world_normal = world_dir.normalize();
-
-                // Sample the cubemap
-                let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
-                let cubemap_color = Vec3x4::new(
-                    cubemap_sample.col(0),
-                    cubemap_sample.col(1),
-                    cubemap_sample.col(2),
-                );
-
-                // Pack color
-                let out_colors = pack_colors(cubemap_color);
-
-                // Use depth test to selectively write color
-                let booleans: [bool; 4] = depth_mask.into();
-                let mask_bvec4 = BVec4::from(booleans);
-                let current_color = self.color[index];
-                let color = UVec4::select(mask_bvec4, out_colors, current_color);
-                self.color[index] = color;
-            }
-        }
     }
 
     // Main rasterizer code
@@ -294,6 +220,12 @@ impl TileRasterizer {
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
         let width_quads = tile_width / 2;
 
+        let inv_viewproj = camera.inverse_view_project_matrix;
+        let inv_viewproj_transposed = inv_viewproj.transpose();
+
+        let rcp_camera_width = Vec4::splat(1.0 / camera.width as f32);
+        let rcp_camera_height = Vec4::splat(1.0 / camera.height as f32);
+
         // Loop over rows of quads
         for y in 0..tile_height / 2 {
             let screen_y = self.screen_min.y + (y as i32) * 2;
@@ -307,72 +239,109 @@ impl TileRasterizer {
 
                 let depth = self.depth[index];
                 let depth_mask = depth.cmpne(Vec4::INFINITY);
-
-                // TODO: On depth=INF pixels just compute the skybox here
-
-                if !depth_mask.any() {
-                    continue;
-                }
+                let depth_mask_bvec4 = bvec4a_to_bvec4(depth_mask);
 
                 let mut out_color = UVec4::ZERO;
 
-                // Consume all possible packets in packet_index uniformly
-                let mut remaining = depth_mask;
-                while remaining.any() {
-                    // Find the first active lane (smallest i where remaining[i] == true)
-                    let lane = remaining.bitmask().trailing_zeros() as usize;
+                // Check if there are any pixels in this quad
+                if depth_mask.any() {
+                    // Consume all possible packets in packet_index uniformly
+                    let mut remaining = depth_mask;
+                    while remaining.any() {
+                        // Find the first active lane (smallest i where remaining[i] == true)
+                        let lane = remaining.bitmask().trailing_zeros() as usize;
 
-                    // Extract that lane's value
-                    let packet_index = packet_index_vec[lane];
+                        // Extract that lane's value
+                        let packet_index = packet_index_vec[lane];
 
-                    // Build mask for all lanes equal to this value
-                    let mask_bvec4 = packet_index_vec.cmpeq(UVec4::splat(packet_index));
-                    let mask = bvec4_to_bvec4a(mask_bvec4);
+                        // Build mask for all lanes equal to this value
+                        let mask_bvec4 = packet_index_vec.cmpeq(UVec4::splat(packet_index));
+                        let mask = bvec4_to_bvec4a(mask_bvec4);
 
-                    let bary0 = self.bary0[index];
-                    let bary1 = self.bary1[index];
-                    let bary2 = Vec4::ONE - bary0 - bary1;
-                    let packet = self.packets_opaque.get(packet_index as usize);
+                        let bary0 = self.bary0[index];
+                        let bary1 = self.bary1[index];
+                        let bary2 = Vec4::ONE - bary0 - bary1;
+                        let packet = self.packets_opaque.get(packet_index as usize);
 
-                    // Fetch the material
-                    let mesh_index = packet.mesh_index as usize;
-                    let primitive_index = packet.primitive_index as usize;
-                    let mesh = &scene.meshes[mesh_index];
-                    let material_index = mesh.primitives[primitive_index].material_index;
-                    let material = &scene.materials[material_index];
+                        // Fetch the material
+                        let mesh_index = packet.mesh_index as usize;
+                        let primitive_index = packet.primitive_index as usize;
+                        let mesh = &scene.meshes[mesh_index];
+                        let material_index = mesh.primitives[primitive_index].material_index;
+                        let material = &scene.materials[material_index];
 
-                    let light_dir = Vec3x4::new(
-                        Vec4::splat(scene.light.direction.x),
-                        Vec4::splat(scene.light.direction.y),
-                        Vec4::splat(scene.light.direction.z),
-                    );
-                    let packet = &packet;
+                        let light_dir = Vec3x4::new(
+                            Vec4::splat(scene.light.direction.x),
+                            Vec4::splat(scene.light.direction.y),
+                            Vec4::splat(scene.light.direction.z),
+                        );
+                        let packet = &packet;
 
-                    let shading_params = PbrShaderParams {
-                        current_color: UVec4::ZERO,
-                        bary0,
-                        bary1,
-                        bary2,
-                        mask,
-                        light_dir,
-                        packet: packet,
-                        material,
-                        camera,
-                        scene,
-                    };
+                        let shading_params = PbrShaderParams {
+                            current_color: UVec4::ZERO,
+                            bary0,
+                            bary1,
+                            bary2,
+                            mask,
+                            light_dir,
+                            packet: packet,
+                            material,
+                            camera,
+                            scene,
+                        };
 
-                    // Execute shader
-                    let color = pbr_shader::<true>(shading_params);
+                        // Execute shader
+                        let color = pbr_shader::<true>(shading_params);
 
-                    // Store fragments
-                    out_color = UVec4::select(mask_bvec4, color, out_color);
+                        // Store fragments
+                        out_color = UVec4::select(mask_bvec4, color, out_color);
 
-                    // Clear out the lanes we just handled
-                    remaining &= !mask;
+                        // Clear out the lanes we just handled
+                        remaining &= !mask;
+                    }
                 }
 
-                // Write color
-                self.write_pixels(screen_x, screen_y, out_color, depth_mask);
+                // Check if there are any skybox pixels in this quad
+                if !depth_mask.all() {
+                    // Render skybox
+                    let pixel_x = Vec4::new(
+                        (screen_x as f32) + 0.5,
+                        (screen_x as f32) + 1.5,
+                        (screen_x as f32) + 0.5,
+                        (screen_x as f32) + 1.5,
+                    );
+                    let pixel_y = Vec4::new(
+                        (screen_y as f32) + 0.5,
+                        (screen_y as f32) + 0.5,
+                        (screen_y as f32) + 1.5,
+                        (screen_y as f32) + 1.5,
+                    );
+
+                    let ndc_x = pixel_x * rcp_camera_width * 2.0 - Vec4::ONE;
+                    let ndc_y = (Vec4::ONE - pixel_y * rcp_camera_height) * 2.0 - Vec4::ONE;
+
+                    let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
+
+                    // Transform by the transposed inverse view-projection matrix
+                    let world_dir =
+                        Vec3x4::transform_direction_transposed(inv_viewproj_transposed, clip_pos);
+                    let world_normal = world_dir.normalize();
+
+                    // Sample the cubemap
+                    let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
+                    let cubemap_color = Vec3x4::new(
+                        cubemap_sample.col(0),
+                        cubemap_sample.col(1),
+                        cubemap_sample.col(2),
+                    );
+
+                    // Select between opaque and skybox
+                    let color = pack_colors(cubemap_color);
+                    out_color = UVec4::select(depth_mask_bvec4, out_color, color);
+                }
+
+                let index = self.index_from_xy(screen_x, screen_y);
+                self.color[index] = out_color;
             }
         }
     }
