@@ -42,7 +42,13 @@ impl TileRasterizer {
         }
 
         // Shade opaque pixels
-        self.shade_vbuffer(scene, camera);
+        if self.packets_opaque.len() == 0 {
+            // Fast path for skybox only tiles
+            self.shade_vbuffer::<true>(scene, camera);
+        } else {
+            // Normal v-buffer shading
+            self.shade_vbuffer::<false>(scene, camera);
+        }
 
         // Sort translucent packets by z, back to front
         self.packets_translucent
@@ -243,16 +249,10 @@ impl TileRasterizer {
     }
 
     // Executes shading on the vbuffer
-    fn shade_vbuffer(&mut self, scene: &Scene, camera: &RenderCamera) {
+    fn shade_vbuffer<const SKYBOX_ONLY: bool>(&mut self, scene: &Scene, camera: &RenderCamera) {
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
         let width_quads = tile_width / 2;
-
-        let inv_viewproj = camera.inverse_view_project_matrix;
-        let inv_viewproj_transposed = inv_viewproj.transpose();
-
-        let rcp_camera_width = Vec4::splat(1.0 / camera.width as f32);
-        let rcp_camera_height = Vec4::splat(1.0 / camera.height as f32);
 
         // Loop over rows of quads
         for y in 0..tile_height / 2 {
@@ -263,6 +263,16 @@ impl TileRasterizer {
                 let screen_x = self.screen_min.x + (quad_x as i32 * 2);
                 let pixel = IVec2::new(screen_x, screen_y);
                 let index = self.index_from_xy(pixel);
+
+                // Fast path for skybox only tiles
+
+                if SKYBOX_ONLY {
+                    let skybox_color = self.compute_skybox(scene, camera, pixel);
+                    self.color[index] = skybox_color;
+                    continue;
+                }
+
+                // Normal v-buffer shading
 
                 let packet_index_vec = self.packet_index[index];
 
@@ -332,47 +342,55 @@ impl TileRasterizer {
 
                 // Check if there are any skybox pixels in this quad
                 if !depth_mask.all() {
-                    // Render skybox
-                    let pixel_x = Vec4::new(
-                        (screen_x as f32) + 0.5,
-                        (screen_x as f32) + 1.5,
-                        (screen_x as f32) + 0.5,
-                        (screen_x as f32) + 1.5,
-                    );
-                    let pixel_y = Vec4::new(
-                        (screen_y as f32) + 0.5,
-                        (screen_y as f32) + 0.5,
-                        (screen_y as f32) + 1.5,
-                        (screen_y as f32) + 1.5,
-                    );
-
-                    let ndc_x = pixel_x * rcp_camera_width * 2.0 - Vec4::ONE;
-                    let ndc_y = (Vec4::ONE - pixel_y * rcp_camera_height) * 2.0 - Vec4::ONE;
-
-                    let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
-
-                    // Transform by the transposed inverse view-projection matrix
-                    let world_dir =
-                        Vec3x4::transform_direction_transposed(inv_viewproj_transposed, clip_pos);
-                    let world_normal = world_dir.normalize();
-
-                    // Sample the cubemap
-                    let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
-                    let cubemap_color = Vec3x4::new(
-                        cubemap_sample.col(0),
-                        cubemap_sample.col(1),
-                        cubemap_sample.col(2),
-                    );
-
-                    // Select between opaque and skybox
-                    let color = pack_colors(cubemap_color);
-                    out_color = UVec4::select(depth_mask_bvec4, out_color, color);
+                    let skybox_color = self.compute_skybox(scene, camera, pixel);
+                    out_color = UVec4::select(depth_mask_bvec4, out_color, skybox_color);
                 }
 
                 // Write color to the tile's color buffer
                 self.color[index] = out_color;
             }
         }
+    }
+
+    fn compute_skybox(&self, scene: &Scene, camera: &RenderCamera, pixel: IVec2) -> UVec4 {
+        let screen_x = pixel.x;
+        let screen_y = pixel.y;
+
+        // Render skybox
+        let pixel_x = Vec4::new(
+            (screen_x as f32) + 0.5,
+            (screen_x as f32) + 1.5,
+            (screen_x as f32) + 0.5,
+            (screen_x as f32) + 1.5,
+        );
+        let pixel_y = Vec4::new(
+            (screen_y as f32) + 0.5,
+            (screen_y as f32) + 0.5,
+            (screen_y as f32) + 1.5,
+            (screen_y as f32) + 1.5,
+        );
+
+        let ndc_x = pixel_x * camera.one_over_width * 2.0 - Vec4::ONE;
+        let ndc_y = (Vec4::ONE - pixel_y * camera.one_over_height) * 2.0 - Vec4::ONE;
+
+        let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
+
+        // Transform by the transposed inverse view-projection matrix
+        let world_dir = Vec3x4::transform_direction_transposed(
+            camera.inverse_view_project_matrix_transposed,
+            clip_pos,
+        );
+        let world_normal = world_dir.normalize();
+
+        // Sample the cubemap
+        let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
+        let cubemap_color = Vec3x4::new(
+            cubemap_sample.col(0),
+            cubemap_sample.col(1),
+            cubemap_sample.col(2),
+        );
+
+        pack_colors(cubemap_color)
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
