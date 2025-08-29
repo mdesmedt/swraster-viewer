@@ -7,9 +7,11 @@ use crate::scene::{SceneError, SceneResult};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum TextureType {
-    Color,
+    SRGB,
     Normal,
+    MetallicRoughness,
     Cubemap,
+    Linear,
 }
 
 pub struct Texture {
@@ -56,18 +58,31 @@ impl Texture {
                     let p01 = self.data[prev_offset + (y1 * prev_width + x0) as usize];
                     let p11 = self.data[prev_offset + (y1 * prev_width + x1) as usize];
 
-                    let mut avg = (p00 + p10 + p01 + p11) / 4.0;
-
-                    // Decode and normalize normal maps instead of using the average
-                    if self.texture_type == TextureType::Normal {
-                        let n00 = Vec3A::from_vec4(p00) * 2.0 - Vec3A::ONE;
-                        let n10 = Vec3A::from_vec4(p10) * 2.0 - Vec3A::ONE;
-                        let n01 = Vec3A::from_vec4(p01) * 2.0 - Vec3A::ONE;
-                        let n11 = Vec3A::from_vec4(p11) * 2.0 - Vec3A::ONE;
-                        let normal = (n00 + n10 + n01 + n11).normalize();
-                        let tangent_space = (normal + Vec3A::ONE) * Vec3A::splat(0.5);
-                        avg = tangent_space.extend(0.0);
-                    }
+                    let avg = match self.texture_type {
+                        TextureType::SRGB => {
+                            let l00 = p00 * p00;
+                            let l10 = p10 * p10;
+                            let l01 = p01 * p01;
+                            let l11 = p11 * p11;
+                            let avg = (l00 + l10 + l01 + l11) / 4.0;
+                            sqrt_vec(avg)
+                        }
+                        TextureType::Normal => {
+                            let n00 = Vec3A::from_vec4(p00) * 2.0 - Vec3A::ONE;
+                            let n10 = Vec3A::from_vec4(p10) * 2.0 - Vec3A::ONE;
+                            let n01 = Vec3A::from_vec4(p01) * 2.0 - Vec3A::ONE;
+                            let n11 = Vec3A::from_vec4(p11) * 2.0 - Vec3A::ONE;
+                            let normal = (n00 + n10 + n01 + n11).normalize();
+                            let tangent_space = (normal + Vec3A::ONE) * Vec3A::splat(0.5);
+                            tangent_space.extend(0.0)
+                        }
+                        TextureType::MetallicRoughness => {
+                            let metallic = (p00.y + p10.y + p01.y + p11.y) / 4.0;
+                            let roughness = (p00.z * p00.z + p10.z * p10.z + p01.z * p01.z + p11.z * p11.z) / 4.0;
+                            Vec4::new(p00.x, metallic, roughness.sqrt(), p00.w)
+                        }
+                        _ => (p00 + p10 + p01 + p11) / 4.0,
+                    };
 
                     self.data.push(avg);
                 }
@@ -226,6 +241,7 @@ impl TextureAndSampler {
         texels.transpose()
     }
 
+    #[allow(dead_code)]
     pub fn sample_point(&self, u: f32, v: f32, mip_level: u32) -> Vec4 {
         let width = self.texture.mip_widths[mip_level as usize];
         let width_f = self.texture.mip_widths_f[mip_level as usize];

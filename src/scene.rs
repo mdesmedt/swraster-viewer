@@ -539,7 +539,7 @@ impl Material {
             .pbr_metallic_roughness()
             .base_color_texture()
             .and_then(|tex| {
-                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::SRGB)
             });
         let is_alpha_tested = material.alpha_mode() == gltf::material::AlphaMode::Mask
             && base_color_texture.is_some();
@@ -565,7 +565,7 @@ impl Material {
                         &tex.texture(),
                         document,
                         texture_cache,
-                        TextureType::Color,
+                        TextureType::MetallicRoughness,
                     )
                 }),
             normal_texture: material.normal_texture().and_then(|tex| {
@@ -582,10 +582,20 @@ impl Material {
                 material.emissive_factor()[2],
             ),
             emissive_texture: material.emissive_texture().and_then(|tex| {
-                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+                get_texture_and_sampler(
+                    &tex.texture(),
+                    document,
+                    texture_cache,
+                    TextureType::Linear,
+                )
             }),
             occlusion_texture: material.occlusion_texture().and_then(|tex| {
-                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::Color)
+                get_texture_and_sampler(
+                    &tex.texture(),
+                    document,
+                    texture_cache,
+                    TextureType::Linear,
+                )
             }),
             is_alpha_tested,
             is_translucent,
@@ -602,7 +612,7 @@ impl Material {
                         &tex.texture(),
                         document,
                         texture_cache,
-                        TextureType::Color,
+                        TextureType::Linear,
                     )
                 }),
         })
