@@ -290,21 +290,15 @@ impl TextureAndSampler {
         let p01 = self.gather_rgb(idx01);
         let p11 = self.gather_rgb(idx11);
 
-        let inv_fx = Vec4::ONE - fx;
-        let inv_fy = Vec4::ONE - fy;
-
-        let lerp_x0_r = p00.x * inv_fx + p10.x * fx;
-        let lerp_x0_g = p00.y * inv_fx + p10.y * fx;
-        let lerp_x0_b = p00.z * inv_fx + p10.z * fx;
-
-        let lerp_x1_r = p01.x * inv_fx + p11.x * fx;
-        let lerp_x1_g = p01.y * inv_fx + p11.y * fx;
-        let lerp_x1_b = p01.z * inv_fx + p11.z * fx;
+        let w00 = (Vec4::ONE - fx) * (Vec4::ONE - fy);
+        let w10 = fx * (Vec4::ONE - fy);
+        let w01 = (Vec4::ONE - fx) * fy;
+        let w11 = fx * fy;
 
         Vec3x4 {
-            x: lerp_x0_r * inv_fy + lerp_x1_r * fy,
-            y: lerp_x0_g * inv_fy + lerp_x1_g * fy,
-            z: lerp_x0_b * inv_fy + lerp_x1_b * fy,
+            x: p00.x * w00 + p10.x * w10 + p01.x * w01 + p11.x * w11,
+            y: p00.y * w00 + p10.y * w10 + p01.y * w01 + p11.y * w11,
+            z: p00.z * w00 + p10.z * w10 + p01.z * w01 + p11.z * w11,
         }
     }
 
