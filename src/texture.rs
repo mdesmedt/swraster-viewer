@@ -267,6 +267,8 @@ impl TextureAndSampler {
 
         let fx = x_f - x0;
         let fy = y_f - y0;
+        let one_minus_fx = Vec4::ONE - fx;
+        let one_minus_fy = Vec4::ONE - fy;
 
         // Apply wrap mode
 
@@ -290,9 +292,9 @@ impl TextureAndSampler {
         let p01 = self.gather_rgb(idx01);
         let p11 = self.gather_rgb(idx11);
 
-        let w00 = (Vec4::ONE - fx) * (Vec4::ONE - fy);
-        let w10 = fx * (Vec4::ONE - fy);
-        let w01 = (Vec4::ONE - fx) * fy;
+        let w00 = one_minus_fx * one_minus_fy;
+        let w10 = fx * one_minus_fy;
+        let w01 = one_minus_fx * fy;
         let w11 = fx * fy;
 
         Vec3x4 {
@@ -329,6 +331,8 @@ impl TextureAndSampler {
 
         let fx = x_f - x0;
         let fy = y_f - y0;
+        let one_minus_fx = Vec4::ONE - fx;
+        let one_minus_fy = Vec4::ONE - fy;
 
         // Apply wrap mode
 
@@ -352,13 +356,10 @@ impl TextureAndSampler {
         let p01 = self.gather_alpha(idx01);
         let p11 = self.gather_alpha(idx11);
 
-        let inv_fx = Vec4::ONE - fx;
-        let inv_fy = Vec4::ONE - fy;
+        let lerp_x0 = p00 * one_minus_fx + p10 * fx;
+        let lerp_x1 = p01 * one_minus_fx + p11 * fx;
 
-        let lerp_x0 = p00 * inv_fx + p10 * fx;
-        let lerp_x1 = p01 * inv_fx + p11 * fx;
-
-        lerp_x0 * inv_fy + lerp_x1 * fy
+        lerp_x0 * one_minus_fy + lerp_x1 * fy
     }
 
     pub fn compute_mip_level(&self, du_dv: Vec4) -> u32 {
