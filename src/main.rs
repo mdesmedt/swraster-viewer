@@ -567,7 +567,7 @@ impl App {
             self.window
                 .as_ref()
                 .unwrap()
-                .set_title(&format!("GLTF Viewer - {} - {:.1} FPS", self.filename, fps,));
+                .set_title(&format!("Software Rasterizer - {} - {:.1} FPS", self.filename, fps,));
             self.frame_count = 0;
             self.last_fps_update = current_time;
         }
@@ -580,7 +580,7 @@ impl ApplicationHandler for App {
         let window_size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
         let window_attributes = Window::default_attributes()
             .with_inner_size(window_size)
-            .with_title(format!("GLTF Viewer - {}", self.filename));
+            .with_title(format!("Software Rasterizer - {}", self.filename));
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         // Init pixels
