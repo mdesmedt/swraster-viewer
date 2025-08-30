@@ -433,14 +433,12 @@ impl TextureCache {
                 let (width, height) = rgba.dimensions();
                 let raw_data = rgba.into_raw();
                 let mut data = Vec::with_capacity((width * height) as usize);
-                for chunk in raw_data.chunks(4) {
-                    if chunk.len() == 4 {
-                        let r = chunk[0] as f32 / 255.0;
-                        let g = chunk[1] as f32 / 255.0;
-                        let b = chunk[2] as f32 / 255.0;
-                        let a = chunk[3] as f32 / 255.0;
-                        data.push(Vec4::new(r, g, b, a));
-                    }
+                for chunk in raw_data.chunks_exact(4) {
+                    let r = chunk[0] as f32 / 255.0;
+                    let g = chunk[1] as f32 / 255.0;
+                    let b = chunk[2] as f32 / 255.0;
+                    let a = chunk[3] as f32 / 255.0;
+                    data.push(Vec4::new(r, g, b, a));
                 }
                 Ok(Texture {
                     width,

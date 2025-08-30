@@ -229,7 +229,7 @@ impl Renderer {
         let num_tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
         buffer
             .pixels
-            .par_chunks_mut(buffer.width * 4 * 2) // 2 rows of quads
+            .par_chunks_exact_mut(buffer.width * 4 * 2) // 2 rows of quads
             .enumerate()
             .for_each(|(quad_y_index, buffer_rows)| {
                 let quad_y = quad_y_index as i32;
@@ -418,15 +418,11 @@ impl Renderer {
         // Compute normal to world rotation matrix (assume uniform scaling)
         let rotation_matrix = Mat3A::from_mat4(model_matrix);
 
-        // Process triangles in batches of 128 triangles
+        // Process triangles in batches of 128
         const TRIANGLES_PER_BATCH: usize = 128;
         const INDICES_PER_BATCH: usize = TRIANGLES_PER_BATCH * 3;
         indices.par_chunks(INDICES_PER_BATCH).for_each(|batch| {
-            for chunk in batch.chunks(3) {
-                if chunk.len() != 3 {
-                    continue;
-                }
-
+            for chunk in batch.chunks_exact(3) {
                 // Read indices
                 let i0 = chunk[0] as usize;
                 let i1 = chunk[1] as usize;
@@ -438,9 +434,9 @@ impl Renderer {
                 let local2 = positions[i2];
 
                 // Compute world space positions
-                let world0 = model_matrix * local0;
-                let world1 = model_matrix * local1;
-                let world2 = model_matrix * local2;
+                let world0 = Vec3A::from_vec4(model_matrix * local0);
+                let world1 = Vec3A::from_vec4(model_matrix * local1);
+                let world2 = Vec3A::from_vec4(model_matrix * local2);
 
                 // Project vertices to clip space
                 let clip0 = mvp_matrix * local0;
@@ -461,21 +457,21 @@ impl Renderer {
                     vertices: [
                         Vertex {
                             pos_clip: clip0,
-                            pos_world: Vec3A::from_vec4(world0),
+                            pos_world: world0,
                             normal: normal_world0,
                             tangent: tangent_world0,
                             uv: texcoords[i0],
                         },
                         Vertex {
                             pos_clip: clip1,
-                            pos_world: Vec3A::from_vec4(world1),
+                            pos_world: world1,
                             normal: normal_world1,
                             tangent: tangent_world1,
                             uv: texcoords[i1],
                         },
                         Vertex {
                             pos_clip: clip2,
-                            pos_world: Vec3A::from_vec4(world2),
+                            pos_world: world2,
                             normal: normal_world2,
                             tangent: tangent_world2,
                             uv: texcoords[i2],
@@ -595,7 +591,6 @@ impl Renderer {
         let p2 = self.clip_to_screen_subpixels(triangle.vertices[2].pos_clip);
 
         // NOTE: At this point triangles are CW front-facing because of screen coordinate conversion
-        // TODO: Just figure out how to keep CCW facing triangles in screen space and deal with it
 
         // Compute signed area
         let signed_area = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
@@ -607,20 +602,18 @@ impl Renderer {
 
         // Set up the values which the rasterizer will need
 
+        let one_over_area = 1.0 / (signed_area.abs() as f32);
+
         let one_over_w = [
             1.0 / triangle.vertices[0].pos_clip.w,
             1.0 / triangle.vertices[1].pos_clip.w,
             1.0 / triangle.vertices[2].pos_clip.w,
         ];
-
-        let one_over_area = 1.0 / (signed_area.abs() as f32);
-
         let z_over_w = [
             triangle.vertices[0].pos_clip.z * one_over_w[0],
             triangle.vertices[1].pos_clip.z * one_over_w[1],
             triangle.vertices[2].pos_clip.z * one_over_w[2],
         ];
-
         let normals = [
             triangle.vertices[0].normal,
             triangle.vertices[1].normal,
@@ -631,13 +624,11 @@ impl Renderer {
             triangle.vertices[1].tangent,
             triangle.vertices[2].tangent,
         ];
-
         let uv_over_w = [
             triangle.vertices[0].uv * one_over_w[0],
             triangle.vertices[1].uv * one_over_w[1],
             triangle.vertices[2].uv * one_over_w[2],
         ];
-
         let pos_world_over_w = [
             triangle.vertices[0].pos_world * one_over_w[0],
             triangle.vertices[1].pos_world * one_over_w[1],
