@@ -123,16 +123,17 @@ pub struct TextureAndSampler {
 }
 
 impl TextureAndSampler {
-    fn apply_wrap_mode(coord: Vec4, mode: &WrapMode) -> Vec4 {
-        match mode {
-            WrapMode::ClampToEdge => coord.clamp(Vec4::ZERO, Vec4::ONE),
-            WrapMode::Repeat => coord - coord.floor(),
+    fn apply_wrap_mode(texel: Vec4, dim: Vec4, mode: &WrapMode) -> Vec4 {
+        let texel2 = match mode {
+            WrapMode::ClampToEdge => texel,
+            WrapMode::Repeat => texel - (texel / dim).floor() * dim,
             WrapMode::MirroredRepeat => {
-                let two = Vec4::splat(2.0);
-                let t = coord - two * (coord / two).floor();
+                let two = dim * Vec4::splat(2.0);
+                let t = texel - (texel / two).floor() * two;
                 t.min(two - t)
             }
-        }
+        };
+        texel2.min(dim - Vec4::splat(1.0))
     }
 
     /// Convert normals into cubemap UVs
@@ -210,16 +211,12 @@ impl TextureAndSampler {
 
     pub fn sample4_rgb(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec3x4 {
         let mip_level = self.compute_mip_level(du_dv);
-        let u = Self::apply_wrap_mode(u_vec, &self.sampler.wrap_s);
-        let v = Self::apply_wrap_mode(v_vec, &self.sampler.wrap_t);
-        self.sample_bilinear_rgb(u, v, mip_level)
+        self.sample_bilinear_rgb(u_vec, v_vec, mip_level)
     }
 
     pub fn sample4_alpha(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec4 {
         let mip_level = self.compute_mip_level(du_dv);
-        let u = Self::apply_wrap_mode(u_vec, &self.sampler.wrap_s);
-        let v = Self::apply_wrap_mode(v_vec, &self.sampler.wrap_t);
-        self.sample_bilinear_alpha(u, v, mip_level)
+        self.sample_bilinear_alpha(u_vec, v_vec, mip_level)
     }
 
     #[allow(dead_code)]
@@ -256,7 +253,6 @@ impl TextureAndSampler {
         let mip_usize = mip_level as usize;
 
         let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
-        let height_i = UVec4::splat(self.texture.mip_heights[mip_usize]);
         let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
         let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
         let offsets = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
@@ -264,19 +260,30 @@ impl TextureAndSampler {
         let x_f = u * width_f - Vec4::splat(0.5);
         let y_f = v * height_f - Vec4::splat(0.5);
 
-        let x0 = x_f.floor().as_uvec4();
-        let y0 = y_f.floor().as_uvec4();
+        let x0 = x_f.floor();
+        let y0 = y_f.floor();
+        let x1 = x0 + Vec4::ONE;
+        let y1 = y0 + Vec4::ONE;
 
-        let x1 = (x0 + UVec4::ONE).min(width_i - UVec4::ONE);
-        let y1 = (y0 + UVec4::ONE).min(height_i - UVec4::ONE);
+        let fx = x_f - x0;
+        let fy = y_f - y0;
 
-        let fx = x_f - x0.as_vec4();
-        let fy = y_f - y0.as_vec4();
+        // Apply wrap mode
 
-        let idx00 = offsets + y0 * width_i + x0;
-        let idx10 = offsets + y0 * width_i + x1;
-        let idx01 = offsets + y1 * width_i + x0;
-        let idx11 = offsets + y1 * width_i + x1;
+        let x0 = Self::apply_wrap_mode(x0, width_f, &self.sampler.wrap_s);
+        let y0 = Self::apply_wrap_mode(y0, height_f, &self.sampler.wrap_t);
+        let x1 = Self::apply_wrap_mode(x1, width_f, &self.sampler.wrap_s);
+        let y1 = Self::apply_wrap_mode(y1, height_f, &self.sampler.wrap_t);
+
+        let x0_i = x0.as_uvec4();
+        let y0_i = y0.as_uvec4();
+        let x1_i = x1.as_uvec4();
+        let y1_i = y1.as_uvec4();
+
+        let idx00 = offsets + y0_i * width_i + x0_i;
+        let idx10 = offsets + y0_i * width_i + x1_i;
+        let idx01 = offsets + y1_i * width_i + x0_i;
+        let idx11 = offsets + y1_i * width_i + x1_i;
 
         let p00 = self.gather_rgb(idx00);
         let p10 = self.gather_rgb(idx10);
@@ -314,27 +321,37 @@ impl TextureAndSampler {
         let mip_usize = mip_level as usize;
 
         let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
-        let height_i = UVec4::splat(self.texture.mip_heights[mip_usize]);
         let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
         let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
-        let offset = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
+        let offsets = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
 
         let x_f = u * width_f - Vec4::splat(0.5);
         let y_f = v * height_f - Vec4::splat(0.5);
 
-        let x0 = x_f.floor().as_uvec4();
-        let y0 = y_f.floor().as_uvec4();
+        let x0 = x_f.floor();
+        let y0 = y_f.floor();
+        let x1 = x0 + Vec4::ONE;
+        let y1 = y0 + Vec4::ONE;
 
-        let x1 = (x0 + UVec4::ONE).min(width_i - UVec4::ONE);
-        let y1 = (y0 + UVec4::ONE).min(height_i - UVec4::ONE);
+        let fx = x_f - x0;
+        let fy = y_f - y0;
 
-        let fx = x_f - x0.as_vec4();
-        let fy = y_f - y0.as_vec4();
+        // Apply wrap mode
 
-        let idx00 = offset + y0 * width_i + x0;
-        let idx10 = offset + y0 * width_i + x1;
-        let idx01 = offset + y1 * width_i + x0;
-        let idx11 = offset + y1 * width_i + x1;
+        let x0 = Self::apply_wrap_mode(x0, width_f, &self.sampler.wrap_s);
+        let y0 = Self::apply_wrap_mode(y0, height_f, &self.sampler.wrap_t);
+        let x1 = Self::apply_wrap_mode(x1, width_f, &self.sampler.wrap_s);
+        let y1 = Self::apply_wrap_mode(y1, height_f, &self.sampler.wrap_t);
+
+        let x0_i = x0.as_uvec4();
+        let y0_i = y0.as_uvec4();
+        let x1_i = x1.as_uvec4();
+        let y1_i = y1.as_uvec4();
+
+        let idx00 = offsets + y0_i * width_i + x0_i;
+        let idx10 = offsets + y0_i * width_i + x1_i;
+        let idx01 = offsets + y1_i * width_i + x0_i;
+        let idx11 = offsets + y1_i * width_i + x1_i;
 
         let p00 = self.gather_alpha(idx00);
         let p10 = self.gather_alpha(idx10);
