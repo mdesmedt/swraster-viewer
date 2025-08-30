@@ -321,7 +321,6 @@ impl TileRasterizer {
                             bary0,
                             bary1,
                             bary2,
-                            mask,
                             light_dir,
                             packet: packet,
                             material,
@@ -383,13 +382,7 @@ impl TileRasterizer {
         let world_normal = world_dir.normalize();
 
         // Sample the cubemap
-        let cubemap_sample = scene.cubemap.sample_cubemap(world_normal);
-        let cubemap_color = Vec3x4::new(
-            cubemap_sample.col(0),
-            cubemap_sample.col(1),
-            cubemap_sample.col(2),
-        );
-
+        let cubemap_color = scene.cubemap.sample_cubemap_rgb(world_normal);
         pack_colors(cubemap_color)
     }
 

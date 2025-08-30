@@ -86,7 +86,6 @@ pub struct PbrShaderParams<'a> {
     pub bary0: Vec4,
     pub bary1: Vec4,
     pub bary2: Vec4,
-    pub mask: BVec4A,
     pub light_dir: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
@@ -101,7 +100,6 @@ impl<'a> PbrShaderParams<'a> {
             bary0: params.bary0,
             bary1: params.bary1,
             bary2: params.bary2,
-            mask: params.mask,
             light_dir: params.light_dir,
             packet: params.packet,
             material: params.material,
@@ -116,7 +114,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
     let bary0 = shading_params.bary0;
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
-    let mask = shading_params.mask;
     let light_dir = shading_params.light_dir;
     let packet = shading_params.packet;
     let material = shading_params.material;
@@ -187,13 +184,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
     // Apply normal mapping if we have a normal map
     if let Some(normal_map) = &material.normal_texture {
-        let normal_map_mat = normal_map.sample4(uv_x, uv_y, du_dv);
-        let mut tangent_space_normal = (Vec3x4::new(
-            normal_map_mat.col(0),
-            normal_map_mat.col(1),
-            normal_map_mat.col(2),
-        )) * 2.0
-            - 1.0;
+        let mut tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv) * 2.0 - 1.0;
         tangent_space_normal = tangent_space_normal.normalize();
         let binormal = input_normal.cross(input_tangent);
         normal_world = input_tangent * tangent_space_normal.x
@@ -240,23 +231,13 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
         material.base_color_factor.z,
     );
 
-    let mut out_mask = mask;
-
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y, du_dv);
-
-        // Alpha test
-        if material.is_alpha_tested {
-            let alpha = diffuse_mat.col(3);
-            out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
-        }
+        let diffuse_mat = diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
 
         // Multiply diffuse color
         // Simple gamma 2.0 instead of 2.2 for perf
-        diffuse.x *= diffuse_mat.col(0) * diffuse_mat.col(0);
-        diffuse.y *= diffuse_mat.col(1) * diffuse_mat.col(1);
-        diffuse.z *= diffuse_mat.col(2) * diffuse_mat.col(2);
+        diffuse *= diffuse_mat * diffuse_mat;
     }
 
     let mut roughness = Vec4::splat(material.roughness_factor);
@@ -264,9 +245,9 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
     // If we have a metallic/roughness texture, sample it
     if let Some(spec_texture) = &material.metallic_roughness_texture {
-        let metallic_roughness_mat = spec_texture.sample4(uv_x, uv_y, du_dv);
-        roughness *= metallic_roughness_mat.col(1);
-        metallic *= metallic_roughness_mat.col(2);
+        let metallic_roughness_mat = spec_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        roughness *= metallic_roughness_mat.y;
+        metallic *= metallic_roughness_mat.z;
     }
     let dielectric = Vec4::ONE - metallic;
 
@@ -287,8 +268,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
 
         // Sample transmission texture if provided
         if let Some(transmission_texture) = &material.transmission_texture {
-            let transmission_mat = transmission_texture.sample4(uv_x, uv_y, du_dv);
-            transmission *= transmission_mat.col(0);
+            let transmission_mat = transmission_texture.sample4_rgb(uv_x, uv_y, du_dv);
+            transmission *= transmission_mat.x;
         }
 
         // Multiply 1-transmission to diffuse lighting
@@ -313,15 +294,11 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> U
     // Sample cubemap (with some totally arbitrary weighting)
     // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
     let reflect = view_normal.reflect(normal_world);
-    let cubemap_mat = scene.cubemap.sample_cubemap(reflect * -1.0);
+    let cubemap_mat = scene.cubemap.sample_cubemap_rgb(reflect * -1.0);
     let dielectric_strength =
         ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
     let metallic_strength = metallic * shininess;
-    let cubemap_color = Vec3x4::new(
-        cubemap_mat.col(0) * cubemap_mat.col(0),
-        cubemap_mat.col(1) * cubemap_mat.col(1),
-        cubemap_mat.col(2) * cubemap_mat.col(2),
-    );
+    let cubemap_color = cubemap_mat * cubemap_mat;
     // Add dielectric cubemap contribution
     color += cubemap_color * dielectric_strength;
     // Add metallic cubemap contribution
@@ -359,7 +336,7 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
 
     let du_dv = packet.du_dv;
 
-    let uv_x = interpolate_attribute(
+    let u_vec = interpolate_attribute(
         packet.uv_over_w[0].x,
         packet.uv_over_w[1].x,
         packet.uv_over_w[2].x,
@@ -367,7 +344,7 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
         bary1,
         bary2,
     ) * w;
-    let uv_y = interpolate_attribute(
+    let v_vec = interpolate_attribute(
         packet.uv_over_w[0].y,
         packet.uv_over_w[1].y,
         packet.uv_over_w[2].y,
@@ -378,10 +355,8 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
 
     let mut out_mask = mask;
     if let Some(diffuse_texture) = &material.base_color_texture {
-        let diffuse_mat = diffuse_texture.sample4(uv_x, uv_y, du_dv);
-        let alpha = diffuse_mat.col(3);
+        let alpha = diffuse_texture.sample4_alpha(u_vec, v_vec, du_dv);
         out_mask &= alpha.cmpge(material.alpha_cutoff_vec);
     }
-
     out_mask
 }

@@ -1,5 +1,5 @@
 use crate::math::*;
-use glam::{Mat4, Vec3A, Vec4};
+use glam::{UVec4, Vec3A, Vec4};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -78,7 +78,9 @@ impl Texture {
                         }
                         TextureType::MetallicRoughness => {
                             let metallic = (p00.y + p10.y + p01.y + p11.y) / 4.0;
-                            let roughness = (p00.z * p00.z + p10.z * p10.z + p01.z * p01.z + p11.z * p11.z) / 4.0;
+                            let roughness =
+                                (p00.z * p00.z + p10.z * p10.z + p01.z * p01.z + p11.z * p11.z)
+                                    / 4.0;
                             Vec4::new(p00.x, metallic, roughness.sqrt(), p00.w)
                         }
                         _ => (p00 + p10 + p01 + p11) / 4.0,
@@ -121,25 +123,14 @@ pub struct TextureAndSampler {
 }
 
 impl TextureAndSampler {
-    fn apply_wrap_mode(coord: f32, mode: &WrapMode) -> f32 {
+    fn apply_wrap_mode(coord: Vec4, mode: &WrapMode) -> Vec4 {
         match mode {
-            WrapMode::ClampToEdge => coord.clamp(0.0, 1.0),
-            WrapMode::Repeat => {
-                let wrapped = coord - coord.floor();
-                if wrapped < 0.0 {
-                    wrapped + 1.0
-                } else {
-                    wrapped
-                }
-            }
+            WrapMode::ClampToEdge => coord.clamp(Vec4::ZERO, Vec4::ONE),
+            WrapMode::Repeat => coord - coord.floor(),
             WrapMode::MirroredRepeat => {
-                let abs_coord = coord.abs();
-                let wrapped = abs_coord - abs_coord.floor();
-                if coord < 0.0 {
-                    1.0 - wrapped
-                } else {
-                    wrapped
-                }
+                let two = Vec4::splat(2.0);
+                let t = coord - two * (coord / two).floor();
+                t.min(two - t)
             }
         }
     }
@@ -212,33 +203,23 @@ impl TextureAndSampler {
         (u_out, v_out)
     }
 
-    pub fn sample_cubemap(&self, normal: Vec3x4) -> Mat4 {
-        // Compute UVs
+    pub fn sample_cubemap_rgb(&self, normal: Vec3x4) -> Vec3x4 {
         let (u, v) = Self::cubemap_uv_from_normal(normal);
-
-        // Sample four texels
-        let mut texels = Mat4::ZERO;
-        for i in 0..4 {
-            *texels.col_mut(i) = self.sample_bilinear(u[i], v[i], 0);
-        }
-        // Return the samples in columns of X, Y, Z and W
-        texels.transpose()
+        self.sample_bilinear_rgb(u, v, 0)
     }
 
-    pub fn sample4(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Mat4 {
-        // Sample four texels
-        let mut texels = Mat4::ZERO;
+    pub fn sample4_rgb(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec3x4 {
         let mip_level = self.compute_mip_level(du_dv);
-        //println!("mip_level: {}", mip_level);
-        for i in 0..4 {
-            // Apply wrap modes to UV coordinates
-            let u = Self::apply_wrap_mode(u_vec[i], &self.sampler.wrap_s);
-            let v = Self::apply_wrap_mode(v_vec[i], &self.sampler.wrap_t);
+        let u = Self::apply_wrap_mode(u_vec, &self.sampler.wrap_s);
+        let v = Self::apply_wrap_mode(v_vec, &self.sampler.wrap_t);
+        self.sample_bilinear_rgb(u, v, mip_level)
+    }
 
-            *texels.col_mut(i) = self.sample_bilinear(u, v, mip_level);
-        }
-        // Return the samples in columns of X, Y, Z and W
-        texels.transpose()
+    pub fn sample4_alpha(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec4 {
+        let mip_level = self.compute_mip_level(du_dv);
+        let u = Self::apply_wrap_mode(u_vec, &self.sampler.wrap_s);
+        let v = Self::apply_wrap_mode(v_vec, &self.sampler.wrap_t);
+        self.sample_bilinear_alpha(u, v, mip_level)
     }
 
     #[allow(dead_code)]
@@ -258,35 +239,115 @@ impl TextureAndSampler {
         self.texture.data[offset]
     }
 
-    pub fn sample_bilinear(&self, u: f32, v: f32, mip_level: u32) -> Vec4 {
-        let width = self.texture.mip_widths[mip_level as usize];
-        let height = self.texture.mip_heights[mip_level as usize];
-        let width_f = self.texture.mip_widths_f[mip_level as usize];
-        let height_f = self.texture.mip_heights_f[mip_level as usize];
+    fn gather_rgb(&self, idx: UVec4) -> Vec3x4 {
+        let a = self.texture.data[idx.x as usize];
+        let b = self.texture.data[idx.y as usize];
+        let c = self.texture.data[idx.z as usize];
+        let d = self.texture.data[idx.w as usize];
 
-        // Texel coordinates
-        let x_f = u * width_f - 0.5;
-        let y_f = v * height_f - 0.5;
+        Vec3x4 {
+            x: Vec4::new(a.x, b.x, c.x, d.x),
+            y: Vec4::new(a.y, b.y, c.y, d.y),
+            z: Vec4::new(a.z, b.z, c.z, d.z),
+        }
+    }
 
-        // Sample four texels
-        let offset = self.texture.mip_offsets[mip_level as usize];
-        let x0 = x_f.floor() as u32;
-        let y0 = y_f.floor() as u32;
-        let x1 = (x0 + 1).min(width - 1);
-        let y1 = (y0 + 1).min(height - 1);
-        let p00 = self.texture.data[offset + (y0 * width + x0) as usize];
-        let p10 = self.texture.data[offset + (y0 * width + x1) as usize];
-        let p01 = self.texture.data[offset + (y1 * width + x0) as usize];
-        let p11 = self.texture.data[offset + (y1 * width + x1) as usize];
+    pub fn sample_bilinear_rgb(&self, u: Vec4, v: Vec4, mip_level: u32) -> Vec3x4 {
+        let mip_usize = mip_level as usize;
 
-        // Bilinear filter
-        let fx = x_f - x0 as f32;
-        let fy = y_f - y0 as f32;
-        let lerp_x0 = p00 * (1.0 - fx) + p10 * fx;
-        let lerp_x1 = p01 * (1.0 - fx) + p11 * fx;
-        let final_color = lerp_x0 * (1.0 - fy) + lerp_x1 * fy;
+        let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
+        let height_i = UVec4::splat(self.texture.mip_heights[mip_usize]);
+        let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
+        let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
+        let offsets = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
 
-        final_color
+        let x_f = u * width_f - Vec4::splat(0.5);
+        let y_f = v * height_f - Vec4::splat(0.5);
+
+        let x0 = x_f.floor().as_uvec4();
+        let y0 = y_f.floor().as_uvec4();
+
+        let x1 = (x0 + UVec4::ONE).min(width_i - UVec4::ONE);
+        let y1 = (y0 + UVec4::ONE).min(height_i - UVec4::ONE);
+
+        let fx = x_f - x0.as_vec4();
+        let fy = y_f - y0.as_vec4();
+
+        let idx00 = offsets + y0 * width_i + x0;
+        let idx10 = offsets + y0 * width_i + x1;
+        let idx01 = offsets + y1 * width_i + x0;
+        let idx11 = offsets + y1 * width_i + x1;
+
+        let p00 = self.gather_rgb(idx00);
+        let p10 = self.gather_rgb(idx10);
+        let p01 = self.gather_rgb(idx01);
+        let p11 = self.gather_rgb(idx11);
+
+        let inv_fx = Vec4::ONE - fx;
+        let inv_fy = Vec4::ONE - fy;
+
+        let lerp_x0_r = p00.x * inv_fx + p10.x * fx;
+        let lerp_x0_g = p00.y * inv_fx + p10.y * fx;
+        let lerp_x0_b = p00.z * inv_fx + p10.z * fx;
+
+        let lerp_x1_r = p01.x * inv_fx + p11.x * fx;
+        let lerp_x1_g = p01.y * inv_fx + p11.y * fx;
+        let lerp_x1_b = p01.z * inv_fx + p11.z * fx;
+
+        Vec3x4 {
+            x: lerp_x0_r * inv_fy + lerp_x1_r * fy,
+            y: lerp_x0_g * inv_fy + lerp_x1_g * fy,
+            z: lerp_x0_b * inv_fy + lerp_x1_b * fy,
+        }
+    }
+
+    fn gather_alpha(&self, idx: UVec4) -> Vec4 {
+        let a = self.texture.data[idx.x as usize];
+        let b = self.texture.data[idx.y as usize];
+        let c = self.texture.data[idx.z as usize];
+        let d = self.texture.data[idx.w as usize];
+
+        Vec4::new(a.w, b.w, c.w, d.w)
+    }
+
+    pub fn sample_bilinear_alpha(&self, u: Vec4, v: Vec4, mip_level: u32) -> Vec4 {
+        let mip_usize = mip_level as usize;
+
+        let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
+        let height_i = UVec4::splat(self.texture.mip_heights[mip_usize]);
+        let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
+        let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
+        let offset = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
+
+        let x_f = u * width_f - Vec4::splat(0.5);
+        let y_f = v * height_f - Vec4::splat(0.5);
+
+        let x0 = x_f.floor().as_uvec4();
+        let y0 = y_f.floor().as_uvec4();
+
+        let x1 = (x0 + UVec4::ONE).min(width_i - UVec4::ONE);
+        let y1 = (y0 + UVec4::ONE).min(height_i - UVec4::ONE);
+
+        let fx = x_f - x0.as_vec4();
+        let fy = y_f - y0.as_vec4();
+
+        let idx00 = offset + y0 * width_i + x0;
+        let idx10 = offset + y0 * width_i + x1;
+        let idx01 = offset + y1 * width_i + x0;
+        let idx11 = offset + y1 * width_i + x1;
+
+        let p00 = self.gather_alpha(idx00);
+        let p10 = self.gather_alpha(idx10);
+        let p01 = self.gather_alpha(idx01);
+        let p11 = self.gather_alpha(idx11);
+
+        let inv_fx = Vec4::ONE - fx;
+        let inv_fy = Vec4::ONE - fy;
+
+        let lerp_x0 = p00 * inv_fx + p10 * fx;
+        let lerp_x1 = p01 * inv_fx + p11 * fx;
+
+        lerp_x0 * inv_fy + lerp_x1 * fy
     }
 
     pub fn compute_mip_level(&self, du_dv: Vec4) -> u32 {
@@ -295,7 +356,7 @@ impl TextureAndSampler {
         let dx2 = du_dv_tex.x * du_dv_tex.x + du_dv_tex.z * du_dv_tex.z;
         let dy2 = du_dv_tex.y * du_dv_tex.y + du_dv_tex.w * du_dv_tex.w;
 
-        // Hack to preserve some sharpness on sloped surfaces
+        // Hack to preserve some sharpness on sloped surfaces, normal code is:
         //let footprint = dx2.max(dy2);
         let footprint = (dx2 + dy2) * 0.5;
 
