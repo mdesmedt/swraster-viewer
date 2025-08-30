@@ -8,20 +8,7 @@ use rayon::prelude::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/******************************************************************************
- * This is the main code of this project. A simple software rasterizer.
- * It renders a Scene with a RenderCamera to a RenderBuffer.
- *
- * Overview of the render path:
- *   1. Traverse nodes/meshes/primitives
- *   2. Clip triangles against the camera frustum
- *   3. Bin triangles into tiles
- *   4. The tile rasterizer rasterizes the triangles within its tile and updates its buffer
- *   5. At the end of rendering every tile gets copied to the final buffer
- *
- * The renderer is multithreaded and uses SIMD to process 4 pixels (in X) at a time.
-******************************************************************************/
-
+// Size (width and height) of raster tiles in pixels
 const TILE_SIZE: i32 = 32;
 
 pub struct RenderBuffer<'a> {
@@ -59,7 +46,6 @@ pub struct Triangle {
 }
 
 // A packet containing a triangle sent from the clipper to the rasterizer for a tile
-#[derive(Clone, Copy)]
 pub struct RasterPacket {
     pub screen_min_pixels: IVec2,
     pub screen_max_pixels: IVec2,
