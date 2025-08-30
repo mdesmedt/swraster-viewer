@@ -122,6 +122,14 @@ impl Vec3x4 {
             z: out_z,
         }
     }
+
+    pub fn select(mask: BVec4A, a: Vec3x4, b: Vec3x4) -> Vec3x4 {
+        Vec3x4::new(
+            Vec4::select(mask, a.x, b.x),
+            Vec4::select(mask, a.y, b.y),
+            Vec4::select(mask, a.z, b.z),
+        )
+    }
 }
 
 impl Add for Vec3x4 {

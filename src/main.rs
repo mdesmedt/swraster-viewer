@@ -564,10 +564,10 @@ impl App {
         let elapsed = current_time.duration_since(self.last_fps_update);
         if elapsed.as_secs_f64() >= 1.0 {
             let fps = self.frame_count as f64 / elapsed.as_secs_f64();
-            self.window
-                .as_ref()
-                .unwrap()
-                .set_title(&format!("Software Rasterizer - {} - {:.1} FPS", self.filename, fps,));
+            self.window.as_ref().unwrap().set_title(&format!(
+                "Software Rasterizer - {} - {:.1} FPS",
+                self.filename, fps,
+            ));
             self.frame_count = 0;
             self.last_fps_update = current_time;
         }

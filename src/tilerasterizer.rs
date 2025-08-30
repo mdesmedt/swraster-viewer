@@ -268,7 +268,7 @@ impl TileRasterizer {
 
                 if SKYBOX_ONLY {
                     let skybox_color = self.compute_skybox(scene, camera, pixel);
-                    self.color[index] = skybox_color;
+                    self.color[index] = pack_colors(skybox_color);
                     continue;
                 }
 
@@ -278,9 +278,8 @@ impl TileRasterizer {
 
                 let depth = self.depth[index];
                 let depth_mask = depth.cmpne(Vec4::INFINITY);
-                let depth_mask_bvec4 = bvec4a_to_bvec4(depth_mask);
 
-                let mut out_color = UVec4::ZERO;
+                let mut out_color = Vec3x4::new(Vec4::ZERO, Vec4::ZERO, Vec4::ZERO);
 
                 // Check if there are any pixels in this quad
                 if depth_mask.any() {
@@ -332,7 +331,7 @@ impl TileRasterizer {
                         let color = pbr_shader::<true>(shading_params);
 
                         // Store fragments
-                        out_color = UVec4::select(mask_bvec4, color, out_color);
+                        out_color = Vec3x4::select(mask, color, out_color);
 
                         // Clear out the lanes we just handled
                         remaining &= !mask;
@@ -342,16 +341,16 @@ impl TileRasterizer {
                 // Check if there are any skybox pixels in this quad
                 if !depth_mask.all() {
                     let skybox_color = self.compute_skybox(scene, camera, pixel);
-                    out_color = UVec4::select(depth_mask_bvec4, out_color, skybox_color);
+                    out_color = Vec3x4::select(depth_mask, out_color, skybox_color);
                 }
 
                 // Write color to the tile's color buffer
-                self.color[index] = out_color;
+                self.color[index] = pack_colors(out_color);
             }
         }
     }
 
-    fn compute_skybox(&self, scene: &Scene, camera: &RenderCamera, pixel: IVec2) -> UVec4 {
+    fn compute_skybox(&self, scene: &Scene, camera: &RenderCamera, pixel: IVec2) -> Vec3x4 {
         let screen_x = pixel.x;
         let screen_y = pixel.y;
 
@@ -382,8 +381,7 @@ impl TileRasterizer {
         let world_normal = world_dir.normalize();
 
         // Sample the cubemap
-        let cubemap_color = scene.cubemap.sample_cubemap_rgb(world_normal);
-        pack_colors(cubemap_color)
+        scene.cubemap.sample_cubemap_rgb(world_normal)
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing
