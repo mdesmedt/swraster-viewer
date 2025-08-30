@@ -18,6 +18,10 @@ ordered-float = "5.0.0"
 parry3d = "0.21.1"
 clap = { version = "4.5.40", features = ["derive"] }
 
+[profile.profiling]
+inherits = "release"
+debug = true
+
 [profile.shipping]
 inherits = "release"
 opt-level = 3
