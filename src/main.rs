@@ -1,5 +1,5 @@
 use clap::Parser;
-use glam::{Vec2, Vec3, Vec3A};
+use glam::{Vec2, Vec3A};
 use gltf::Gltf;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -227,8 +227,8 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
             GRID_SIZE,
             GRID_SIZE,
             GRID_SIZE,
-            Vec3::from(scene.bounds.min),
-            Vec3::from(scene.bounds.max),
+            scene.bounds.min,
+            scene.bounds.max,
         );
 
         // Fill voxel grid with light intensity based on visibility of the voxel center to the light
@@ -245,7 +245,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
             .par_iter_mut()
             .for_each(|(coords, out_intensity)| {
                 // Compute ray origin with some bias to avoid self-shadowing
-                let voxel_center = center_min + coords.as_vec3() * voxel_size;
+                let voxel_center = center_min + coords.as_vec3a() * voxel_size;
                 let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
 
                 // Find all intersections along the ray

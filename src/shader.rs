@@ -19,6 +19,7 @@ pub struct RasterizerShaderParams<'a> {
     pub mask: BVec4A,
     pub depth_from_depth_test: Vec4,
     pub light_dir: Vec3x4,
+    pub light_color: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
     pub camera: &'a RenderCamera,
@@ -88,6 +89,7 @@ pub struct PbrShaderParams<'a> {
     pub bary1: Vec4,
     pub bary2: Vec4,
     pub light_dir: Vec3x4,
+    pub light_color: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
     pub camera: &'a RenderCamera,
@@ -102,6 +104,7 @@ impl<'a> PbrShaderParams<'a> {
             bary1: params.bary1,
             bary2: params.bary2,
             light_dir: params.light_dir,
+            light_color: params.light_color,
             packet: params.packet,
             material: params.material,
             camera: params.camera,
@@ -116,6 +119,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
     let light_dir = shading_params.light_dir;
+    let light_color = shading_params.light_color;
     let packet = shading_params.packet;
     let material = shading_params.material;
     let camera = shading_params.camera;
@@ -257,7 +261,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // Now compute the color, starting with irradiance
     // TODO: This is wrong for metallic, but without filtered cubemaps it's tricky to fix
-    let mut color = Vec3x4::from_vec4(light_intensity);
+    let mut color = light_color * light_intensity;
 
     // Add ambient diffuse lighting
     // TODO: Arbitrary ambient colors. Sample the environment map instead.

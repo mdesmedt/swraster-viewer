@@ -95,6 +95,11 @@ impl TileRasterizer {
             Vec4::splat(light.direction.y),
             Vec4::splat(light.direction.z),
         );
+        let light_color = Vec3x4::new(
+            Vec4::splat(light.color.x),
+            Vec4::splat(light.color.y),
+            Vec4::splat(light.color.z),
+        );
 
         // Fetch the material
         let mesh_index = packet.mesh_index as usize;
@@ -222,6 +227,7 @@ impl TileRasterizer {
                             mask,
                             depth_from_depth_test: depth,
                             light_dir,
+                            light_color,
                             packet,
                             material,
                             camera,
@@ -253,6 +259,17 @@ impl TileRasterizer {
         let tile_width = (self.screen_max.x - self.screen_min.x) as usize;
         let tile_height = (self.screen_max.y - self.screen_min.y) as usize;
         let width_quads = tile_width / 2;
+
+        let light_dir = Vec3x4::new(
+            Vec4::splat(scene.light.direction.x),
+            Vec4::splat(scene.light.direction.y),
+            Vec4::splat(scene.light.direction.z),
+        );
+        let light_color = Vec3x4::new(
+            Vec4::splat(scene.light.color.x),
+            Vec4::splat(scene.light.color.y),
+            Vec4::splat(scene.light.color.z),
+        );
 
         // Loop over rows of quads
         for y in 0..tile_height / 2 {
@@ -309,11 +326,6 @@ impl TileRasterizer {
                         let material_index = mesh.primitives[primitive_index].material_index;
                         let material = &scene.materials[material_index];
 
-                        let light_dir = Vec3x4::new(
-                            Vec4::splat(scene.light.direction.x),
-                            Vec4::splat(scene.light.direction.y),
-                            Vec4::splat(scene.light.direction.z),
-                        );
                         let packet = &packet;
 
                         let shading_params = PbrShaderParams {
@@ -322,6 +334,7 @@ impl TileRasterizer {
                             bary1,
                             bary2,
                             light_dir,
+                            light_color,
                             packet: packet,
                             material,
                             camera,

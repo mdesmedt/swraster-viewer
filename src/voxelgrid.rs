@@ -1,5 +1,5 @@
 use crate::math::*;
-use glam::{USizeVec4, UVec3, Vec3, Vec4};
+use glam::{USizeVec4, UVec3, Vec3A, Vec4};
 use rayon::prelude::*;
 
 /// A 3D voxel grid that stores light intensity values for each voxel
@@ -7,8 +7,8 @@ pub struct VoxelGrid {
     width: usize,
     height: usize,
     depth: usize,
-    world_min: Vec3,
-    world_max: Vec3,
+    world_min: Vec3A,
+    world_max: Vec3A,
     light_intensity: Vec<f32>,
 }
 
@@ -18,8 +18,8 @@ impl VoxelGrid {
         width: usize,
         height: usize,
         depth: usize,
-        world_min: Vec3,
-        world_max: Vec3,
+        world_min: Vec3A,
+        world_max: Vec3A,
     ) -> Self {
         let light_intensity = vec![0.0; width * height * depth];
         Self {
@@ -51,14 +51,14 @@ impl VoxelGrid {
     }
 
     /// Get the world minimum bounds
-    pub fn world_min(&self) -> Vec3 {
+    pub fn world_min(&self) -> Vec3A {
         self.world_min
     }
 
     /// Get the size of a voxel in world space
-    pub fn voxel_size(&self) -> Vec3 {
+    pub fn voxel_size(&self) -> Vec3A {
         let world_size = self.world_max - self.world_min;
-        Vec3::new(
+        Vec3A::new(
             world_size.x / self.width as f32,
             world_size.y / self.height as f32,
             world_size.z / self.depth as f32,

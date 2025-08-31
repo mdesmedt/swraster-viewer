@@ -1,5 +1,5 @@
 use crate::scene::{Node, Primitive, Scene};
-use glam::{Vec3, Vec3A};
+use glam::Vec3A;
 use parry3d::{
     math::{Isometry, Point, Vector},
     query::Ray,
@@ -62,7 +62,7 @@ impl RayTracer {
     }
 
     /// Find all intersections along a ray, sorted from nearest to furthest
-    pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Vec<usize> {
+    pub fn ray_intersect(&self, origin: Vec3A, direction: Vec3A) -> Vec<usize> {
         let dir = Vector::new(direction.x, direction.y, direction.z);
         let ray = Ray::new(Point::new(origin.x, origin.y, origin.z), dir);
 

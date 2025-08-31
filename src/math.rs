@@ -349,7 +349,7 @@ pub fn aces_tonemap(color: Vec3x4) -> Vec3x4 {
     let e = Vec4::splat(0.14);
 
     let map_channel = |v: Vec4| {
-        let numerator   = v * (a * v + b);
+        let numerator = v * (a * v + b);
         let denominator = v * (c * v + d) + e;
         (numerator / denominator).clamp(Vec4::ZERO, Vec4::ONE)
     };

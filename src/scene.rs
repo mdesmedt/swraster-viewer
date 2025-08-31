@@ -162,8 +162,8 @@ impl Scene {
             cameras: Vec::new(),
             bounds: SceneBounds::new_empty(),
             light: Light {
-                direction: Vec3::new(-0.2, 1.0, 0.5).normalize(),
-                color: Vec3::new(1.0, 1.0, 1.0),
+                direction: Vec3A::new(-0.2, 1.0, 0.5).normalize(),
+                color: Vec3A::new(1.0, 1.0, 0.95),
             },
             voxel_grid: None,
             cubemap,
@@ -649,10 +649,9 @@ impl SceneCamera {
     }
 }
 
-#[derive(Debug)]
 pub struct Light {
-    pub direction: Vec3,
-    pub color: Vec3,
+    pub direction: Vec3A,
+    pub color: Vec3A,
 }
 
 pub struct SceneBounds {
