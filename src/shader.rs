@@ -265,8 +265,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // Add ambient diffuse lighting
     // TODO: Arbitrary ambient colors. Sample the environment map instead.
-    let ambient_top: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.2);
-    let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.08, 0.08, 0.05);
+    let ambient_top: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.15);
+    let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.1);
     let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
     let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
     color += ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
