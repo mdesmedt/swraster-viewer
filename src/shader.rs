@@ -194,8 +194,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     }
 
     // Compute N.L diffuse lighting
-    let n_dot_l = normal_world.dot(light_dir);
-    let diffuse = n_dot_l.clamp(Vec4::ZERO, Vec4::ONE);
+    let n_dot_l = normal_world.dot(light_dir).clamp(Vec4::ZERO, Vec4::ONE);
 
     // Compute the view direction for each pixel
     let view_dir = Vec3x4::from_vec3a(camera.position) - pos_world;
@@ -213,9 +212,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
     let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
 
-    // More ambient light coming from the top, peak intensity of 0.15
-    let ambient = (normal_world.y + Vec4::splat(1.5)) * Vec4::splat((0.5 / 1.5) * 0.2);
-
     // Get voxel grid lighting if available, for shadows
     let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
         voxel_grid.get_filtered_light_intensity_vec(pos_world)
@@ -223,7 +219,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         Vec4::ONE
     };
 
-    let light_intensity = diffuse * voxel_light_intensity + ambient;
+    let light_intensity = n_dot_l * voxel_light_intensity;
 
     // Diffuse starts with the base color factor
     let mut diffuse = Vec3x4::from_f32(
@@ -262,6 +258,14 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Now compute the color, starting with irradiance
     // TODO: This is wrong for metallic, but without filtered cubemaps it's tricky to fix
     let mut color = Vec3x4::from_vec4(light_intensity);
+
+    // Add ambient diffuse lighting
+    // TODO: Arbitrary ambient colors. Sample the environment map instead.
+    let ambient_top: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.2);
+    let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.08, 0.08, 0.05);
+    let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
+    let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
+    color += ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
 
     // For translucent materials, blend in the current framebuffer color
     if TRANSLUCENT {
