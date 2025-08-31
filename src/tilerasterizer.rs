@@ -268,7 +268,8 @@ impl TileRasterizer {
 
                 if SKYBOX_ONLY {
                     let skybox_color = self.compute_skybox(scene, camera, pixel);
-                    self.color[index] = pack_colors(skybox_color);
+                    let tonemapped = aces_tonemap(skybox_color);
+                    self.color[index] = pack_colors(tonemapped);
                     continue;
                 }
 
@@ -345,7 +346,8 @@ impl TileRasterizer {
                 }
 
                 // Write color to the tile's color buffer
-                self.color[index] = pack_colors(out_color);
+                let tonemapped = aces_tonemap(out_color);
+                self.color[index] = pack_colors(tonemapped);
             }
         }
     }

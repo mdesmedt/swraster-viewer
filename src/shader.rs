@@ -73,10 +73,10 @@ impl RasterizerShader for TranslucentForwardShader {
         let current_color = tile.color[params.index_in_tile];
         let shading_params = PbrShaderParams::from_rasterizer_params(&params, current_color);
         let color = pbr_shader::<true>(shading_params);
-        let packed_color = pack_colors(color);
+        let tonemapped = aces_tonemap(color);
         tile.color[params.index_in_tile] = UVec4::select(
             bvec4a_to_bvec4(params.mask),
-            packed_color,
+            pack_colors(tonemapped),
             tile.color[params.index_in_tile],
         );
     }
@@ -321,8 +321,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // color.y = cubemap_mat.col(1);
     // color.z = cubemap_mat.col(2);
 
-    // Clamp final colors before packing
-    color.clamp(Vec4::ZERO, Vec4::ONE)
+    color
 }
 
 fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec4A {

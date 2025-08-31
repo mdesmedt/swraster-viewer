@@ -340,3 +340,23 @@ pub fn interpolate_attribute_vec3x4(
     let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
     Vec3x4::new(x, y, z)
 }
+
+pub fn aces_tonemap(color: Vec3x4) -> Vec3x4 {
+    let a = Vec4::splat(2.51);
+    let b = Vec4::splat(0.03);
+    let c = Vec4::splat(2.43);
+    let d = Vec4::splat(0.59);
+    let e = Vec4::splat(0.14);
+
+    let map_channel = |v: Vec4| {
+        let numerator   = v * (a * v + b);
+        let denominator = v * (c * v + d) + e;
+        (numerator / denominator).clamp(Vec4::ZERO, Vec4::ONE)
+    };
+
+    Vec3x4 {
+        x: map_channel(color.x),
+        y: map_channel(color.y),
+        z: map_channel(color.z),
+    }
+}
