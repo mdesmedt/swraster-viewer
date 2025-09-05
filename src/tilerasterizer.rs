@@ -396,7 +396,7 @@ impl TileRasterizer {
         let world_normal = world_dir.normalize();
 
         // Sample the cubemap
-        scene.cubemap.sample_cubemap_rgb(world_normal)
+        scene.cubemap.sample_cubemap_rgb(world_normal, UVec4::ZERO)
     }
 
     // Perform depth test and return final depth and a mask of the pixels that passed depth testing

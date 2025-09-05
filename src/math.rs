@@ -360,3 +360,37 @@ pub fn aces_tonemap(color: Vec3x4) -> Vec3x4 {
         z: map_channel(color.z),
     }
 }
+
+// Gather functions for Vec<f32> and Vec<u32>
+
+pub trait GatherU32 {
+    fn gather(&self, indices: UVec4) -> UVec4;
+}
+
+pub trait GatherF32 {
+    fn gather(&self, indices: UVec4) -> Vec4;
+}
+
+impl GatherU32 for Vec<u32> {
+    #[inline(always)]
+    fn gather(&self, indices: UVec4) -> UVec4 {
+        UVec4::new(
+            self[indices.x as usize],
+            self[indices.y as usize],
+            self[indices.z as usize],
+            self[indices.w as usize],
+        )
+    }
+}
+
+impl GatherF32 for Vec<f32> {
+    #[inline(always)]
+    fn gather(&self, indices: UVec4) -> Vec4 {
+        Vec4::new(
+            self[indices.x as usize],
+            self[indices.y as usize],
+            self[indices.z as usize],
+            self[indices.w as usize],
+        )
+    }
+}

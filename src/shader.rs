@@ -303,7 +303,9 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Sample cubemap (with some totally arbitrary weighting)
     // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
     let reflect = view_normal.reflect(normal_world);
-    let cubemap_mat = scene.cubemap.sample_cubemap_rgb(reflect * -1.0);
+    let cubemap_mat = scene
+        .cubemap
+        .sample_cubemap_rgb(reflect * -1.0, UVec4::ZERO);
     let dielectric_strength =
         ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
     let metallic_strength = metallic * shininess;
