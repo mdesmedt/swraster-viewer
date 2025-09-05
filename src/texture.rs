@@ -217,8 +217,11 @@ impl TextureAndSampler {
         let offsets = self.texture.mip_offsets.gather(mip_level)
             + array_slice * self.texture.array_stride.gather(mip_level);
 
-        let x_f = u * width_f - Vec4::splat(0.5);
-        let y_f = v * height_f - Vec4::splat(0.5);
+        // Convert to texel coordinates
+        // Built-in to this logic is a half-texel offset so u,v maps to
+        // [0.5/DIM, 1 - 0.5/DIM] as a hack to hide edge discontinuities
+        let x_f = u * (width_f - Vec4::ONE);
+        let y_f = v * (height_f - Vec4::ONE);
 
         let x0 = x_f.floor();
         let y0 = y_f.floor();
