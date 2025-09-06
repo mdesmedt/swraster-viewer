@@ -234,11 +234,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        let diffuse_mat = diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
-
-        // Multiply diffuse color
-        // Simple gamma 2.0 instead of 2.2 for perf
-        diffuse *= diffuse_mat * diffuse_mat;
+        diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
     }
 
     let mut roughness = Vec4::splat(material.roughness_factor);
@@ -303,13 +299,12 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Sample cubemap (with some totally arbitrary weighting)
     let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
     let reflect = view_normal.reflect(normal_world);
-    let cubemap_mat = scene
+    let cubemap_color = scene
         .cubemap
         .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
     let dielectric_strength =
         ((shininess - Vec4::splat(0.5)) * Vec4::splat(0.25)).clamp(Vec4::ZERO, Vec4::ONE);
     let metallic_strength = metallic * shininess;
-    let cubemap_color = cubemap_mat * cubemap_mat;
     // Add dielectric cubemap contribution
     color += cubemap_color * dielectric_strength;
     // Add metallic cubemap contribution

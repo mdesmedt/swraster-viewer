@@ -511,7 +511,13 @@ impl TextureCache {
                                 let g = raw_data[src_idx + 1] as f32 / 255.0;
                                 let b = raw_data[src_idx + 2] as f32 / 255.0;
                                 let a = raw_data[src_idx + 3] as f32 / 255.0;
-                                data.push(Vec4::new(r, g, b, a));
+                                if texture_type == TextureType::SRGB
+                                    || texture_type == TextureType::Cubemap
+                                {
+                                    data.push(Vec4::new(r * r, g * g, b * b, a));
+                                } else {
+                                    data.push(Vec4::new(r, g, b, a));
+                                }
                             }
                         }
                     }
@@ -544,7 +550,12 @@ impl TextureCache {
                         let g = chunk[1] as f32 / 255.0;
                         let b = chunk[2] as f32 / 255.0;
                         let a = chunk[3] as f32 / 255.0;
-                        data.push(Vec4::new(r, g, b, a));
+                        if texture_type == TextureType::SRGB || texture_type == TextureType::Cubemap
+                        {
+                            data.push(Vec4::new(r * r, g * g, b * b, a));
+                        } else {
+                            data.push(Vec4::new(r, g, b, a));
+                        }
                     }
                     Ok(Texture {
                         width,
