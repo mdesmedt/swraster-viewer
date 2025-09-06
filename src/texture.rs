@@ -21,6 +21,7 @@ pub struct Texture {
     pub texture_type: TextureType,
     pub data: Vec<Vec4>, // Vec4 floating point data
     pub max_mip_level: u32,
+    pub max_mip_level_vec: Vec4,
     pub mip_offsets: Vec<u32>,
     pub mip_widths: Vec<u32>,
     pub mip_heights: Vec<u32>,
@@ -112,6 +113,7 @@ impl Texture {
             self.mip_widths_f.push(mip_width as f32);
             self.mip_heights_f.push(mip_height as f32);
             self.max_mip_level += 1;
+            self.max_mip_level_vec += Vec4::ONE;
         }
     }
 }
@@ -233,10 +235,10 @@ impl TextureAndSampler {
         let one_minus_fx = Vec4::ONE - fx;
         let one_minus_fy = Vec4::ONE - fy;
 
-        let x0 = x0.clamp(Vec4::ZERO, width_f);
-        let y0 = y0.clamp(Vec4::ZERO, height_f);
-        let x1 = x1.clamp(Vec4::ZERO, width_f);
-        let y1 = y1.clamp(Vec4::ZERO, height_f);
+        let x0 = x0.clamp(Vec4::ZERO, width_f - Vec4::ONE);
+        let y0 = y0.clamp(Vec4::ZERO, height_f - Vec4::ONE);
+        let x1 = x1.clamp(Vec4::ZERO, width_f - Vec4::ONE);
+        let y1 = y1.clamp(Vec4::ZERO, height_f - Vec4::ONE);
 
         let x0_i = x0.as_uvec4();
         let y0_i = y0.as_uvec4();
@@ -421,6 +423,11 @@ impl TextureAndSampler {
         let mip = (footprint.max(1.0) as u32).ilog2() >> 1;
         mip.min(self.texture.max_mip_level)
     }
+
+    pub fn mip_level_from_scalar(&self, f: Vec4) -> UVec4 {
+        let max_mip_level = (f * self.texture.max_mip_level_vec).round();
+        max_mip_level.as_uvec4()
+    }
 }
 
 pub struct TextureCache {
@@ -521,6 +528,7 @@ impl TextureCache {
                         texture_type,
                         data,
                         max_mip_level: 0,
+                        max_mip_level_vec: Vec4::ZERO,
                         mip_offsets: vec![0],
                         mip_widths: vec![face_width],
                         mip_heights: vec![face_height],
@@ -550,6 +558,7 @@ impl TextureCache {
                         texture_type,
                         data,
                         max_mip_level: 0,
+                        max_mip_level_vec: Vec4::ZERO,
                         mip_offsets: vec![0],
                         mip_widths: vec![width],
                         mip_heights: vec![height],
@@ -593,6 +602,7 @@ impl TextureCache {
             data,
             texture_type,
             max_mip_level: 0,
+            max_mip_level_vec: Vec4::ZERO,
             mip_offsets: vec![0],
             mip_widths: vec![width],
             mip_heights: vec![height],

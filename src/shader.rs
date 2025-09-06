@@ -301,13 +301,13 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     color += diffuse * specular * metallic;
 
     // Sample cubemap (with some totally arbitrary weighting)
-    // TODO: Currently fades out cubemap with roughness because we lack cubemap mipmaps
+    let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
     let reflect = view_normal.reflect(normal_world);
     let cubemap_mat = scene
         .cubemap
-        .sample_cubemap_rgb(reflect * -1.0, UVec4::ZERO);
+        .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
     let dielectric_strength =
-        ((shininess - Vec4::splat(0.6)) * Vec4::splat(0.22)).clamp(Vec4::ZERO, Vec4::ONE);
+        ((shininess - Vec4::splat(0.5)) * Vec4::splat(0.25)).clamp(Vec4::ZERO, Vec4::ONE);
     let metallic_strength = metallic * shininess;
     let cubemap_color = cubemap_mat * cubemap_mat;
     // Add dielectric cubemap contribution
@@ -327,9 +327,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // color.z = voxel_light_intensity;
 
     // Debug: Show cubemap
-    // color.x = cubemap_mat.col(0);
-    // color.y = cubemap_mat.col(1);
-    // color.z = cubemap_mat.col(2);
+    //color = cubemap_color;
 
     color
 }

@@ -58,6 +58,10 @@ impl Vec3x4 {
         Self { x, y, z }
     }
 
+    pub fn splat(v: f32) -> Self {
+        Self::new(Vec4::splat(v), Vec4::splat(v), Vec4::splat(v))
+    }
+
     pub fn from_f32(x: f32, y: f32, z: f32) -> Self {
         Self::new(Vec4::splat(x), Vec4::splat(y), Vec4::splat(z))
     }
@@ -128,6 +132,14 @@ impl Vec3x4 {
             Vec4::select(mask, a.x, b.x),
             Vec4::select(mask, a.y, b.y),
             Vec4::select(mask, a.z, b.z),
+        )
+    }
+
+    pub fn lerp(a: Vec3x4, b: Vec3x4, t: Vec4) -> Vec3x4 {
+        Vec3x4::new(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
         )
     }
 }
