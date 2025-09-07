@@ -256,13 +256,10 @@ impl Renderer {
                         let base_pixel_x = tile.screen_min.x + quad_x as i32 * 2;
 
                         // Read the raw color values for the quad
-                        let color = tile.color[src_index as usize];
-
-                        // Apply tonemapping
-                        let tonemapped = aces_tonemap(color);
+                        let mut color = tile.color[src_index as usize];
 
                         // Apply approximate sRGB with a square root
-                        let srgb_color = tonemapped.sqrt();
+                        color = color.sqrt();
 
                         // Iterate over each pixel in the quad
                         for sub_y in 0..2 {
@@ -270,8 +267,7 @@ impl Renderer {
                                 let pixel_x = base_pixel_x + sub_x;
                                 if pixel_x < self.width {
                                     // Extract the color as RGB
-                                    let pixel =
-                                        srgb_color.extract_lane((sub_y * 2 + sub_x) as usize);
+                                    let pixel = color.extract_lane((sub_y * 2 + sub_x) as usize);
 
                                     // Quantize
                                     let r: u8 = (pixel.x * 255.0) as u8;

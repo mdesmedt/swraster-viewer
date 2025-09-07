@@ -156,6 +156,10 @@ impl Vec3x4 {
     pub fn extract_lane(&self, lane: usize) -> Vec3A {
         Vec3A::new(self.x[lane], self.y[lane], self.z[lane])
     }
+
+    pub fn recip(&self) -> Vec3x4 {
+        Vec3x4::new(self.x.recip(), self.y.recip(), self.z.recip())
+    }
 }
 
 impl Add for Vec3x4 {
@@ -316,7 +320,8 @@ pub fn interpolate_attribute_vec3x4(
     Vec3x4::new(x, y, z)
 }
 
-pub fn aces_tonemap(color: Vec3x4) -> Vec3x4 {
+#[allow(dead_code)]
+pub fn tonemap_aces(color: Vec3x4) -> Vec3x4 {
     let a = Vec4::splat(2.51);
     let b = Vec4::splat(0.03);
     let c = Vec4::splat(2.43);
@@ -334,6 +339,12 @@ pub fn aces_tonemap(color: Vec3x4) -> Vec3x4 {
         y: map_channel(color.y),
         z: map_channel(color.z),
     }
+}
+
+#[allow(dead_code)]
+pub fn tonemap_reinhard(color: Vec3x4) -> Vec3x4 {
+    let denom_rcp = (color + Vec3x4::ONE).recip();
+    color * denom_rcp
 }
 
 // Gather functions for Vec<f32> and Vec<u32>
