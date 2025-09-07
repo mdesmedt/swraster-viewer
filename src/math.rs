@@ -54,11 +54,19 @@ pub struct Vec3x4 {
 }
 
 impl Vec3x4 {
-    pub fn new(x: Vec4, y: Vec4, z: Vec4) -> Self {
+    pub const ZERO: Self = Self::splat(0.0);
+
+    #[allow(dead_code)]
+    pub const ONE: Self = Self::splat(1.0);
+
+    #[allow(dead_code)]
+    pub const NEG_ONE: Self = Self::splat(-1.0);
+
+    pub const fn new(x: Vec4, y: Vec4, z: Vec4) -> Self {
         Self { x, y, z }
     }
 
-    pub fn splat(v: f32) -> Self {
+    pub const fn splat(v: f32) -> Self {
         Self::new(Vec4::splat(v), Vec4::splat(v), Vec4::splat(v))
     }
 
@@ -70,16 +78,16 @@ impl Vec3x4 {
         Self::new(Vec4::splat(v.x), Vec4::splat(v.y), Vec4::splat(v.z))
     }
 
-    pub fn from_vec4(x: Vec4) -> Self {
-        Self::new(x, x, x)
-    }
-
     pub fn dot(&self, other: Vec3x4) -> Vec4 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
 
     pub fn length_squared(&self) -> Vec4 {
         self.x * self.x + self.y * self.y + self.z * self.z
+    }
+
+    pub fn sqrt(&self) -> Vec3x4 {
+        Vec3x4::new(sqrt_vec(self.x), sqrt_vec(self.y), sqrt_vec(self.z))
     }
 
     pub fn normalize(&self) -> Vec3x4 {
@@ -103,6 +111,7 @@ impl Vec3x4 {
         *self - normal * self.dot(normal) * 2.0
     }
 
+    #[allow(dead_code)]
     pub fn clamp(&self, min: Vec4, max: Vec4) -> Vec3x4 {
         Vec3x4::new(
             self.x.clamp(min, max),
@@ -135,12 +144,17 @@ impl Vec3x4 {
         )
     }
 
+    #[allow(dead_code)]
     pub fn lerp(a: Vec3x4, b: Vec3x4, t: Vec4) -> Vec3x4 {
         Vec3x4::new(
             a.x + (b.x - a.x) * t,
             a.y + (b.y - a.y) * t,
             a.z + (b.z - a.z) * t,
         )
+    }
+
+    pub fn extract_lane(&self, lane: usize) -> Vec3A {
+        Vec3A::new(self.x[lane], self.y[lane], self.z[lane])
     }
 }
 
@@ -266,57 +280,6 @@ impl MulAssign<f32> for Vec3x4 {
 
 // Utility functions
 // TODO: Move these to a separate file
-
-pub fn pack_colors(color: Vec3x4) -> UVec4 {
-    // Gamma correct the final colors before packing
-    // Apply gamma 2.0 instead of 2.2 for perf
-    let color_r = sqrt_vec(color.x);
-    let color_g = sqrt_vec(color.y);
-    let color_b = sqrt_vec(color.z);
-
-    UVec4::new(
-        ((color_r.x * 255.0) as u32) << 16
-            | ((color_g.x * 255.0) as u32) << 8
-            | ((color_b.x * 255.0) as u32),
-        ((color_r.y * 255.0) as u32) << 16
-            | ((color_g.y * 255.0) as u32) << 8
-            | ((color_b.y * 255.0) as u32),
-        ((color_r.z * 255.0) as u32) << 16
-            | ((color_g.z * 255.0) as u32) << 8
-            | ((color_b.z * 255.0) as u32),
-        ((color_r.w * 255.0) as u32) << 16
-            | ((color_g.w * 255.0) as u32) << 8
-            | ((color_b.w * 255.0) as u32),
-    )
-}
-
-pub fn unpack_colors(color: UVec4) -> Vec3x4 {
-    // Extract red (bits 16-23)
-    let color_r = Vec4::new(
-        ((color.x >> 16) & 0xFF) as f32 / 255.0,
-        ((color.y >> 16) & 0xFF) as f32 / 255.0,
-        ((color.z >> 16) & 0xFF) as f32 / 255.0,
-        ((color.w >> 16) & 0xFF) as f32 / 255.0,
-    );
-
-    // Extract green (bits 8-15)
-    let color_g = Vec4::new(
-        ((color.x >> 8) & 0xFF) as f32 / 255.0,
-        ((color.y >> 8) & 0xFF) as f32 / 255.0,
-        ((color.z >> 8) & 0xFF) as f32 / 255.0,
-        ((color.w >> 8) & 0xFF) as f32 / 255.0,
-    );
-
-    // Extract blue (bits 0-7)
-    let color_b = Vec4::new(
-        (color.x & 0xFF) as f32 / 255.0,
-        (color.y & 0xFF) as f32 / 255.0,
-        (color.z & 0xFF) as f32 / 255.0,
-        (color.w & 0xFF) as f32 / 255.0,
-    );
-
-    Vec3x4::new(color_r * color_r, color_g * color_g, color_b * color_b)
-}
 
 pub fn bvec4_to_bvec4a(b: BVec4) -> BVec4A {
     let arr: [bool; 4] = b.into();

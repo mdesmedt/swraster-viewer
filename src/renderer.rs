@@ -1,4 +1,5 @@
 use crate::bumpqueue::{BumpPool, BumpQueue};
+use crate::math::*;
 use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Primitive, Scene};
 use crate::tilerasterizer::*;
@@ -106,7 +107,7 @@ fn create_screen_tile(
         screen_max,
         packets_opaque: BumpQueue::new(pool.clone()),
         packets_translucent: BumpQueue::new(pool.clone()),
-        color: vec![UVec4::ZERO; width_quads * height_quads],
+        color: vec![Vec3x4::ZERO; width_quads * height_quads],
         depth: vec![Vec4::splat(f32::INFINITY); width_quads * height_quads],
         packet_index: vec![UVec4::ZERO; width_quads * height_quads],
         bary0: vec![Vec4::ZERO; width_quads * height_quads],
@@ -254,27 +255,34 @@ impl Renderer {
                         let src_index = src_index_base + quad_x;
                         let base_pixel_x = tile.screen_min.x + quad_x as i32 * 2;
 
-                        // Copy each element of the quad to individual pixels
-                        let colors = tile.color[src_index as usize].to_array();
+                        // Read the raw color values for the quad
+                        let color = tile.color[src_index as usize];
+
+                        // Apply tonemapping
+                        let tonemapped = aces_tonemap(color);
+
+                        // Apply approximate sRGB with a square root
+                        let srgb_color = tonemapped.sqrt();
+
+                        // Iterate over each pixel in the quad
                         for sub_y in 0..2 {
                             for sub_x in 0..2 {
-                                // Write the 4 pixels in the X dimension
                                 let pixel_x = base_pixel_x + sub_x;
                                 if pixel_x < self.width {
-                                    // Read the u32 packed color
-                                    let rgba = colors[(sub_y * 2 + sub_x) as usize];
+                                    // Extract the color as RGB
+                                    let pixel =
+                                        srgb_color.extract_lane((sub_y * 2 + sub_x) as usize);
 
-                                    // Unpack the components
-                                    let r: u8 = (rgba >> 0 & 0xFF) as u8;
-                                    let g: u8 = (rgba >> 8 & 0xFF) as u8;
-                                    let b: u8 = (rgba >> 16 & 0xFF) as u8;
+                                    // Quantize
+                                    let r: u8 = (pixel.x * 255.0) as u8;
+                                    let g: u8 = (pixel.y * 255.0) as u8;
+                                    let b: u8 = (pixel.z * 255.0) as u8;
 
                                     // Write the components to the backbuffer
                                     let dst_offset = (pixel_x + sub_y * self.width) as usize * 4;
-                                    // TODO: Fix this being backwards after switching to pixels
-                                    buffer_rows[dst_offset] = b;
+                                    buffer_rows[dst_offset] = r;
                                     buffer_rows[dst_offset + 1] = g;
-                                    buffer_rows[dst_offset + 2] = r;
+                                    buffer_rows[dst_offset + 2] = b;
 
                                     // Assume A is never written to
                                     //buffer_row[offset + 3] = 0xFF;

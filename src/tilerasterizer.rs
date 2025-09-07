@@ -20,8 +20,8 @@ pub struct TileRasterizer {
     pub screen_max: IVec2,
     pub packets_opaque: BumpQueue<RasterPacket>,
     pub packets_translucent: BumpQueue<RasterPacket>,
-    // Packed color and depth
-    pub color: Vec<UVec4>,
+    // Color and depth
+    pub color: Vec<Vec3x4>,
     pub depth: Vec<Vec4>,
     // Internal "visibility-buffer"
     pub packet_index: Vec<UVec4>,
@@ -284,9 +284,7 @@ impl TileRasterizer {
                 // Fast path for skybox only tiles
 
                 if SKYBOX_ONLY {
-                    let skybox_color = self.compute_skybox(scene, camera, pixel);
-                    let tonemapped = aces_tonemap(skybox_color);
-                    self.color[index] = pack_colors(tonemapped);
+                    self.color[index] = self.compute_skybox(scene, camera, pixel);
                     continue;
                 }
 
@@ -297,7 +295,7 @@ impl TileRasterizer {
                 let depth = self.depth[index];
                 let depth_mask = depth.cmpne(Vec4::INFINITY);
 
-                let mut out_color = Vec3x4::new(Vec4::ZERO, Vec4::ZERO, Vec4::ZERO);
+                let mut out_color = Vec3x4::ZERO;
 
                 // Check if there are any pixels in this quad
                 if depth_mask.any() {
@@ -329,7 +327,7 @@ impl TileRasterizer {
                         let packet = &packet;
 
                         let shading_params = PbrShaderParams {
-                            current_color: UVec4::ZERO,
+                            current_color: Vec3x4::ZERO,
                             bary0,
                             bary1,
                             bary2,
@@ -359,8 +357,7 @@ impl TileRasterizer {
                 }
 
                 // Write color to the tile's color buffer
-                let tonemapped = aces_tonemap(out_color);
-                self.color[index] = pack_colors(tonemapped);
+                self.color[index] = out_color
             }
         }
     }

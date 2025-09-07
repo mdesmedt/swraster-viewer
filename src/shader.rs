@@ -74,22 +74,18 @@ impl RasterizerShader for TranslucentForwardShader {
         let current_color = tile.color[params.index_in_tile];
         let shading_params = PbrShaderParams::from_rasterizer_params(&params, current_color);
         let color = pbr_shader::<true>(shading_params);
-        let tonemapped = aces_tonemap(color);
-        tile.color[params.index_in_tile] = UVec4::select(
-            bvec4a_to_bvec4(params.mask),
-            pack_colors(tonemapped),
-            tile.color[params.index_in_tile],
-        );
+        tile.color[params.index_in_tile] =
+            Vec3x4::select(params.mask, color, tile.color[params.index_in_tile]);
     }
 }
 
 pub struct PbrShaderParams<'a> {
-    pub current_color: UVec4,
     pub bary0: Vec4,
     pub bary1: Vec4,
     pub bary2: Vec4,
     pub light_dir: Vec3x4,
     pub light_color: Vec3x4,
+    pub current_color: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
     pub camera: &'a RenderCamera,
@@ -97,14 +93,14 @@ pub struct PbrShaderParams<'a> {
 }
 
 impl<'a> PbrShaderParams<'a> {
-    fn from_rasterizer_params(params: &RasterizerShaderParams<'a>, current_color: UVec4) -> Self {
+    fn from_rasterizer_params(params: &RasterizerShaderParams<'a>, current_color: Vec3x4) -> Self {
         Self {
-            current_color: current_color,
             bary0: params.bary0,
             bary1: params.bary1,
             bary2: params.bary2,
             light_dir: params.light_dir,
             light_color: params.light_color,
+            current_color: current_color,
             packet: params.packet,
             material: params.material,
             camera: params.camera,
@@ -282,9 +278,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         color *= inv_transmission;
 
         // Add the transmitted color multiplied by the transmission factor
-        let current_color_packed = shading_params.current_color;
-        let current_color = unpack_colors(current_color_packed);
-        color += current_color * transmission;
+        color += shading_params.current_color * transmission;
     }
 
     // Multiply by diffuse color
