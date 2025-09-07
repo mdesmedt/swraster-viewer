@@ -60,7 +60,7 @@ struct Settings {
 
     /// Disable vsync
     #[arg(long)]
-    disable_vsync: bool,
+    no_vsync: bool,
 }
 
 struct RenderState {
@@ -427,7 +427,7 @@ impl App {
             LoadingState::Loaded(render_state) => {
                 if !loading_complete {
                     // First frame after loading
-                    if self.settings.disable_vsync {
+                    if self.settings.no_vsync {
                         self.pixels.as_mut().unwrap().enable_vsync(false);
                     }
                     loading_complete = true;
