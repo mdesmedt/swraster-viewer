@@ -11,7 +11,6 @@ use crate::{
 pub struct RasterizerShaderParams<'a> {
     pub index_in_tile: usize,
     pub packet_index: usize,
-    pub bary0: Vec4,
     pub bary1: Vec4,
     pub bary2: Vec4,
     pub z: Vec4,
@@ -37,8 +36,8 @@ impl RasterizerShader for VBufferOpaqueShader {
     fn shade(&self, params: RasterizerShaderParams, tile: &mut TileRasterizer) {
         let mut mask = params.mask;
         let material = params.material;
-        let bary0 = params.bary0;
         let bary1 = params.bary1;
+        let bary2 = params.bary2;
         let packet_index_vec = UVec4::splat(params.packet_index as u32);
 
         if material.is_alpha_tested {
@@ -52,10 +51,10 @@ impl RasterizerShader for VBufferOpaqueShader {
             packet_index_vec,
             tile.packet_index[params.index_in_tile],
         );
-        tile.bary0[params.index_in_tile] =
-            Vec4::select(mask, bary0, tile.bary0[params.index_in_tile]);
         tile.bary1[params.index_in_tile] =
             Vec4::select(mask, bary1, tile.bary1[params.index_in_tile]);
+        tile.bary2[params.index_in_tile] =
+            Vec4::select(mask, bary2, tile.bary2[params.index_in_tile]);
         if !material.is_alpha_tested {
             // Write the result from the early Z test
             tile.depth[params.index_in_tile] = params.depth_from_depth_test;
@@ -80,7 +79,6 @@ impl RasterizerShader for TranslucentForwardShader {
 }
 
 pub struct PbrShaderParams<'a> {
-    pub bary0: Vec4,
     pub bary1: Vec4,
     pub bary2: Vec4,
     pub light_dir: Vec3x4,
@@ -95,7 +93,6 @@ pub struct PbrShaderParams<'a> {
 impl<'a> PbrShaderParams<'a> {
     fn from_rasterizer_params(params: &RasterizerShaderParams<'a>, current_color: Vec3x4) -> Self {
         Self {
-            bary0: params.bary0,
             bary1: params.bary1,
             bary2: params.bary2,
             light_dir: params.light_dir,
@@ -111,7 +108,6 @@ impl<'a> PbrShaderParams<'a> {
 
 /// Calculates pseudo-PBR shading and returns a packed color
 pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> Vec3x4 {
-    let bary0 = shading_params.bary0;
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
     let light_dir = shading_params.light_dir;
@@ -123,67 +119,17 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // Begin attribute interpolation
 
-    let w = 1.0
-        / interpolate_attribute(
-            packet.one_over_w[0],
-            packet.one_over_w[1],
-            packet.one_over_w[2],
-            bary0,
-            bary1,
-            bary2,
-        );
+    let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
 
-    let input_normal = interpolate_attribute_vec3x4(
-        packet.normals[0],
-        packet.normals[1],
-        packet.normals[2],
-        bary0,
-        bary1,
-        bary2,
-    )
-    .normalize();
-
-    let input_tangent = interpolate_attribute_vec3x4(
-        packet.tangents[0],
-        packet.tangents[1],
-        packet.tangents[2],
-        bary0,
-        bary1,
-        bary2,
-    )
-    .normalize();
-
-    let pos_world = interpolate_attribute_vec3x4(
-        packet.pos_world_over_w[0],
-        packet.pos_world_over_w[1],
-        packet.pos_world_over_w[2],
-        bary0,
-        bary1,
-        bary2,
-    ) * w;
-
-    let uv_x = interpolate_attribute(
-        packet.uv_over_w[0].x,
-        packet.uv_over_w[1].x,
-        packet.uv_over_w[2].x,
-        bary0,
-        bary1,
-        bary2,
-    ) * w;
-    let uv_y = interpolate_attribute(
-        packet.uv_over_w[0].y,
-        packet.uv_over_w[1].y,
-        packet.uv_over_w[2].y,
-        bary0,
-        bary1,
-        bary2,
-    ) * w;
-
+    let input_normal = packet.normals.interpolate(bary1, bary2).normalize();
+    let input_tangent = packet.tangents.interpolate(bary1, bary2).normalize();
+    let pos_world = packet.pos_world_over_w.interpolate(bary1, bary2) * w;
+    let uv_x = packet.u_over_w.interpolate(bary1, bary2) * w;
+    let uv_y = packet.v_over_w.interpolate(bary1, bary2) * w;
     let du_dv = packet.du_dv * w;
 
-    let mut normal_world = input_normal;
-
     // Apply normal mapping if we have a normal map
+    let mut normal_world = input_normal;
     if let Some(normal_map) = &material.normal_texture {
         let mut tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv) * 2.0 - 1.0;
         tangent_space_normal = tangent_space_normal.normalize();
@@ -322,7 +268,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 }
 
 fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec4A {
-    let bary0 = shading_params.bary0;
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
     let packet = shading_params.packet;
@@ -331,22 +276,8 @@ fn get_alpha_test_mask(shading_params: &RasterizerShaderParams, w: Vec4) -> BVec
 
     let du_dv = packet.du_dv;
 
-    let u_vec = interpolate_attribute(
-        packet.uv_over_w[0].x,
-        packet.uv_over_w[1].x,
-        packet.uv_over_w[2].x,
-        bary0,
-        bary1,
-        bary2,
-    ) * w;
-    let v_vec = interpolate_attribute(
-        packet.uv_over_w[0].y,
-        packet.uv_over_w[1].y,
-        packet.uv_over_w[2].y,
-        bary0,
-        bary1,
-        bary2,
-    ) * w;
+    let u_vec = packet.u_over_w.interpolate(bary1, bary2) * w;
+    let v_vec = packet.v_over_w.interpolate(bary1, bary2) * w;
 
     let mut out_mask = mask;
     if let Some(diffuse_texture) = &material.base_color_texture {

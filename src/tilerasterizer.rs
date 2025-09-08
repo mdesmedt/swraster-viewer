@@ -25,8 +25,8 @@ pub struct TileRasterizer {
     pub depth: Vec<Vec4>,
     // Internal "visibility-buffer"
     pub packet_index: Vec<UVec4>,
-    pub bary0: Vec<Vec4>,
     pub bary1: Vec<Vec4>,
+    pub bary2: Vec<Vec4>,
 }
 
 impl TileRasterizer {
@@ -186,42 +186,24 @@ impl TileRasterizer {
                 let mask = w0.cmpge(Vec4::ZERO) & w1.cmpge(Vec4::ZERO) & w2.cmpge(Vec4::ZERO);
                 if mask.any() {
                     // Compute the barycentrics
-                    let bary0: Vec4 = w0 * one_over_area_vec;
                     let bary1: Vec4 = w1 * one_over_area_vec;
                     let bary2: Vec4 = w2 * one_over_area_vec;
 
                     // Interpolate w and z
-                    let w = 1.0
-                        / interpolate_attribute(
-                            packet.one_over_w[0],
-                            packet.one_over_w[1],
-                            packet.one_over_w[2],
-                            bary0,
-                            bary1,
-                            bary2,
-                        );
+                    let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
+                    let z = packet.z_over_w.interpolate(bary1, bary2) * w;
 
-                    let z = interpolate_attribute(
-                        packet.z_over_w[0],
-                        packet.z_over_w[1],
-                        packet.z_over_w[2],
-                        bary0,
-                        bary1,
-                        bary2,
-                    ) * w;
-
+                    // Compute pixel coordinate from subpixel
                     let pixel = p >> SUBPIXEL_SHIFT;
 
                     // Perform depth test
                     let (depth, mask) = self.depth_test(pixel, z, mask);
-
                     if mask.any() {
                         let shading_params = RasterizerShaderParams {
                             index_in_tile: self.index_from_xy(pixel),
                             packet_index,
                             z,
                             w,
-                            bary0,
                             bary1,
                             bary2,
                             mask,
@@ -312,9 +294,8 @@ impl TileRasterizer {
                         let mask_bvec4 = packet_index_vec.cmpeq(UVec4::splat(packet_index));
                         let mask = bvec4_to_bvec4a(mask_bvec4);
 
-                        let bary0 = self.bary0[index];
                         let bary1 = self.bary1[index];
-                        let bary2 = Vec4::ONE - bary0 - bary1;
+                        let bary2 = self.bary2[index];
                         let packet = self.packets_opaque.get(packet_index as usize);
 
                         // Fetch the material
@@ -328,7 +309,6 @@ impl TileRasterizer {
 
                         let shading_params = PbrShaderParams {
                             current_color: Vec3x4::ZERO,
-                            bary0,
                             bary1,
                             bary2,
                             light_dir,

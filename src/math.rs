@@ -295,31 +295,6 @@ pub fn bvec4a_to_bvec4(b: BVec4A) -> BVec4 {
     BVec4::from(arr)
 }
 
-pub fn interpolate_attribute(
-    a: f32,
-    b: f32,
-    c: f32,
-    bary0: Vec4,
-    bary1: Vec4,
-    bary2: Vec4,
-) -> Vec4 {
-    a * bary0 + b * bary1 + c * bary2
-}
-
-pub fn interpolate_attribute_vec3x4(
-    a: Vec3A,
-    b: Vec3A,
-    c: Vec3A,
-    bary0: Vec4,
-    bary1: Vec4,
-    bary2: Vec4,
-) -> Vec3x4 {
-    let x = interpolate_attribute(a.x, b.x, c.x, bary0, bary1, bary2);
-    let y = interpolate_attribute(a.y, b.y, c.y, bary0, bary1, bary2);
-    let z = interpolate_attribute(a.z, b.z, c.z, bary0, bary1, bary2);
-    Vec3x4::new(x, y, z)
-}
-
 #[allow(dead_code)]
 pub fn tonemap_aces(color: Vec3x4) -> Vec3x4 {
     let a = Vec4::splat(2.51);
@@ -378,5 +353,52 @@ impl GatherF32 for Vec<f32> {
             self[indices.z as usize],
             self[indices.w as usize],
         )
+    }
+}
+
+pub struct ScalarInterpolator {
+    pub a: f32,
+    pub da: f32,
+    pub db: f32,
+}
+
+impl ScalarInterpolator {
+    pub fn new(a: f32, b: f32, c: f32) -> Self {
+        let da = b - a;
+        let db = c - a;
+        Self { a, da, db }
+    }
+
+    pub fn from_array(arr: [f32; 3]) -> Self {
+        let a = arr[0];
+        let da = arr[1] - a;
+        let db = arr[2] - a;
+        Self { a, da, db }
+    }
+
+    pub fn interpolate(&self, bary1: Vec4, bary2: Vec4) -> Vec4 {
+        self.a + bary1 * self.da + bary2 * self.db
+    }
+}
+
+pub struct Vec3Interpolator {
+    pub a: Vec3A,
+    pub da: Vec3A,
+    pub db: Vec3A,
+}
+
+impl Vec3Interpolator {
+    pub fn from_array(arr: [Vec3A; 3]) -> Self {
+        let a = arr[0];
+        let da = arr[1] - a;
+        let db = arr[2] - a;
+        Self { a, da, db }
+    }
+
+    pub fn interpolate(&self, bary1: Vec4, bary2: Vec4) -> Vec3x4 {
+        let x = self.a.x + bary1 * self.da.x + bary2 * self.db.x;
+        let y = self.a.y + bary1 * self.da.y + bary2 * self.db.y;
+        let z = self.a.z + bary1 * self.da.z + bary2 * self.db.z;
+        Vec3x4::new(x, y, z)
     }
 }
