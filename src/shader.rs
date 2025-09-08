@@ -188,21 +188,23 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         roughness *= metallic_roughness_mat.y;
         metallic *= metallic_roughness_mat.z;
     }
+
+    // Handy inverse roughness and inverse metallic factors
+    let shininess = Vec4::ONE - roughness;
     let dielectric = Vec4::ONE - metallic;
 
     // Compute specular
-    let shininess = Vec4::ONE - roughness;
     let specular_shiny = n_dot_h_32;
     let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
     let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
     let specular = n_dot_h_blend * voxel_light_intensity;
 
-    // Now compute the color, starting with irradiance
-    // TODO: This is wrong for metallic, but without filtered cubemaps it's tricky to fix
+    // Now compute the color, starting with diffuse lighting
+    // TODO: This is wrong for metallic
     let mut color = light_color * light_intensity;
 
     // Add ambient diffuse lighting
-    // TODO: Arbitrary ambient colors. Sample the environment map instead.
+    // TODO: Arbitrary ambient. Sample filtered cubemap instead?
     let ambient_top: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.15);
     let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.1);
     let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
