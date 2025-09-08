@@ -1,12 +1,11 @@
 use glam::{BVec4A, UVec4, Vec4};
 
-use crate::{
-    math::*,
-    rendercamera::RenderCamera,
-    renderer::RasterPacket,
-    scene::{Material, Scene},
-    tilerasterizer::TileRasterizer,
-};
+use crate::math::*;
+use crate::rendercamera::RenderCamera;
+use crate::renderer::RasterPacket;
+use crate::scene::{Material, Scene};
+use crate::tilerasterizer::TileRasterizer;
+use crate::util::*;
 
 pub struct RasterizerShaderParams<'a> {
     pub index_in_tile: usize,

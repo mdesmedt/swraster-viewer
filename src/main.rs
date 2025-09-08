@@ -26,6 +26,7 @@ mod renderer;
 mod shader;
 mod texture;
 mod tilerasterizer;
+mod util;
 mod voxelgrid;
 
 // TODO: Remove dead code in the GLTF scene boilerplate module. This is just to stop rustc from complaining.
