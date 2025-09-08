@@ -243,13 +243,12 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let cubemap_color = scene
         .cubemap
         .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
-    let dielectric_strength =
-        ((shininess - Vec4::splat(0.5)) * Vec4::splat(0.25)).clamp(Vec4::ZERO, Vec4::ONE);
-    let metallic_strength = metallic * shininess;
+    let shininess_2 = shininess * shininess;
+    let shininess_4 = shininess_2 * shininess_2;
     // Add dielectric cubemap contribution
-    color += cubemap_color * dielectric_strength;
+    color += cubemap_color * dielectric * shininess_4 * Vec4::splat(0.2);
     // Add metallic cubemap contribution
-    color += cubemap_color * diffuse * metallic_strength;
+    color += cubemap_color * metallic * diffuse * shininess;
 
     // Debug: Show world space position
     //color = pos_world;
@@ -258,9 +257,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // color = input_normal;
 
     // Debug: Show voxel lighting
-    // color.x = voxel_light_intensity;
-    // color.y = voxel_light_intensity;
-    // color.z = voxel_light_intensity;
+    //color = Vec3x4::from_vec4(voxel_light_intensity);
 
     // Debug: Show cubemap
     //color = cubemap_color;

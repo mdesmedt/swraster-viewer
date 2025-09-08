@@ -78,6 +78,11 @@ impl Vec3x4 {
         Self::new(Vec4::splat(v.x), Vec4::splat(v.y), Vec4::splat(v.z))
     }
 
+    #[allow(dead_code)]
+    pub fn from_vec4(v: Vec4) -> Self {
+        Self::new(v, v, v)
+    }
+
     pub fn dot(&self, other: Vec3x4) -> Vec4 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
