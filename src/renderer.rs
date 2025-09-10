@@ -260,6 +260,9 @@ impl Renderer {
                         // Read the raw color values for the quad
                         let mut color = tile.color[src_index as usize];
 
+                        // Apply fixed exposure
+                        color *= Vec3x4::splat(1.4);
+
                         // Apply approximate sRGB with a square root
                         color = color.sqrt();
 
