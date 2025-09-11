@@ -76,14 +76,15 @@ impl TileRasterizer {
         const HALF_PIXEL: i32 = SUBPIXEL_SCALE / 2;
         const ONE_HALF_PIXEL: i32 = SUBPIXEL_SCALE + HALF_PIXEL;
 
-        let x_start_pixels = packet.screen_min_pixels.x & !1; // Align to quads
+        // Rasterize position aligned to quads
+        let x_start_pixels = packet.screen_min_pixels.x & !1;
         let y_start_pixels = packet.screen_min_pixels.y & !1;
 
+        // Compute subpixel positions
         let x_start_subpixels = x_start_pixels * SUBPIXEL_SCALE;
         let y_start_subpixels = y_start_pixels * SUBPIXEL_SCALE;
         let x_end_subpixels = packet.screen_max_pixels.x * SUBPIXEL_SCALE;
         let y_end_subpixels = packet.screen_max_pixels.y * SUBPIXEL_SCALE;
-
         let mut p = IVec2::new(x_start_subpixels, y_start_subpixels);
 
         // Fetch the light
@@ -113,8 +114,7 @@ impl TileRasterizer {
 
         let one_over_area_vec = Vec4::splat(packet.one_over_area);
 
-        // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
-
+        // Helper function to apply top-left bias
         fn top_left_bias(a: i32, b: i32) -> i32 {
             if a < 0 || (a == 0 && b > 0) {
                 0
@@ -122,6 +122,8 @@ impl TileRasterizer {
                 -1
             }
         }
+
+        // Set up edge function coefficients for edges v0->v1, v1->v2, v2->v0
 
         // Edge v0->v1: (y1-y0)x + (x0-x1)y + (x1*y0 - x0*y1) = 0
         let a01 = p1.y - p0.y;
