@@ -263,6 +263,14 @@ impl Mul<Vec4> for Vec3x4 {
     }
 }
 
+impl Mul<Vec3A> for Vec3x4 {
+    type Output = Self;
+
+    fn mul(self, vec3a: Vec3A) -> Self {
+        Self::new(self.x * vec3a.x, self.y * vec3a.y, self.z * vec3a.z)
+    }
+}
+
 impl MulAssign for Vec3x4 {
     fn mul_assign(&mut self, other: Self) {
         self.x *= other.x;

@@ -103,7 +103,7 @@ pub struct Material {
     pub roughness_factor: f32,
     pub metallic_roughness_texture: Option<TextureAndSampler>,
     pub normal_texture: Option<TextureAndSampler>,
-    pub emissive_factor: Vec3,
+    pub emissive_factor: Vec3A,
     pub emissive_texture: Option<TextureAndSampler>,
     pub occlusion_texture: Option<TextureAndSampler>,
     pub is_alpha_tested: bool,
@@ -576,7 +576,7 @@ impl Material {
                     TextureType::Normal,
                 )
             }),
-            emissive_factor: Vec3::new(
+            emissive_factor: Vec3A::new(
                 material.emissive_factor()[0],
                 material.emissive_factor()[1],
                 material.emissive_factor()[2],

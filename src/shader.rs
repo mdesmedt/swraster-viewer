@@ -237,6 +237,12 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Add metallic specular
     color += diffuse * specular * metallic;
 
+    // Sample emissive texture if provided
+    if let Some(emissive_texture) = &material.emissive_texture {
+        let emissive_mat = emissive_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        color += emissive_mat * material.emissive_factor;
+    }
+
     // Sample cubemap (with some totally arbitrary weighting)
     let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
     let reflect = view_normal.reflect(normal_world);
