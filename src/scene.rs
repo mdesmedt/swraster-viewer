@@ -586,7 +586,7 @@ impl Material {
                     &tex.texture(),
                     document,
                     texture_cache,
-                    TextureType::Linear,
+                    TextureType::SRGB,
                 )
             }),
             occlusion_texture: material.occlusion_texture().and_then(|tex| {
