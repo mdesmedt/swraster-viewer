@@ -17,6 +17,7 @@ boxcar = "0.2.14"
 ordered-float = "5.0.0"
 parry3d = "0.24.0"
 clap = { version = "4.5.47", features = ["derive"] }
+dashmap = "6.1.0"
 
 [profile.profiling]
 inherits = "release"

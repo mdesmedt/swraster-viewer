@@ -1,4 +1,5 @@
 use glam::{Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -185,15 +186,12 @@ impl Scene {
             scene.meshes.push(Mesh::from_gltf(&mesh, buffers)?);
         }
 
-        // Collect materials using the provided texture cache
-        for material in document.materials() {
-            scene.materials.push(Material::from_gltf(
-                &material,
-                document,
-                buffers,
-                texture_cache,
-            )?);
-        }
+        // Load materials in parallel
+        let gltf_materials = document.materials().collect::<Vec<_>>();
+        scene.materials = gltf_materials
+            .par_iter()
+            .map(|material| Material::from_gltf(material, document, buffers, texture_cache))
+            .collect::<SceneResult<Vec<_>>>()?;
 
         // Collect cameras
         for camera in document.cameras() {
@@ -475,7 +473,7 @@ fn compute_smooth_normals(positions: &[Vec4], indices: &[u32]) -> Vec<Vec3A> {
 fn get_texture_and_sampler(
     texture_gltf: &gltf::texture::Texture,
     document: &gltf::Document,
-    texture_cache: &mut TextureCache,
+    texture_cache: &TextureCache,
     texture_type: TextureType,
 ) -> Option<TextureAndSampler> {
     match texture_gltf.source().source() {
@@ -530,7 +528,7 @@ impl Material {
         material: &gltf::Material,
         document: &gltf::Document,
         _buffers: &[gltf::buffer::Data],
-        texture_cache: &mut TextureCache,
+        texture_cache: &TextureCache,
     ) -> SceneResult<Self> {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();

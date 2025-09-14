@@ -1,8 +1,8 @@
 use crate::math::*;
 use crate::util::*;
+use dashmap::DashMap;
 use glam::{UVec4, Vec3A, Vec4};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::scene::{SceneError, SceneResult};
 
@@ -432,34 +432,35 @@ impl TextureAndSampler {
 }
 
 pub struct TextureCache {
-    textures: HashMap<String, Arc<Texture>>,
+    textures: DashMap<String, Arc<OnceLock<Arc<Texture>>>>,
     base_dir: Option<String>,
 }
 
 impl TextureCache {
     pub fn new(base_dir: String) -> Self {
         Self {
-            textures: HashMap::new(),
+            textures: DashMap::new(),
             base_dir: Some(base_dir),
         }
     }
 
-    pub fn get_or_create(&mut self, uri: &str, texture_type: TextureType) -> Arc<Texture> {
-        if let Some(texture) = self.textures.get(uri) {
-            Arc::clone(texture)
-        } else {
-            // Load the texture from file
-            let texture = match self.load_texture(uri, texture_type) {
-                Ok(tex) => Arc::new(tex),
+    pub fn get_or_create(&self, uri: &str, texture_type: TextureType) -> Arc<Texture> {
+        let cell = self
+            .textures
+            .entry(uri.to_string())
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone();
+
+        cell.get_or_init(|| {
+            Arc::new(match self.load_texture(uri, texture_type) {
+                Ok(tex) => tex,
                 Err(e) => {
                     eprintln!("Failed to load texture '{}': {}", uri, e);
-                    // Create a fallback texture (checkerboard pattern)
-                    Arc::new(self.create_fallback_texture(texture_type))
+                    self.create_fallback_texture(texture_type)
                 }
-            };
-            self.textures.insert(uri.to_string(), Arc::clone(&texture));
-            texture
-        }
+            })
+        })
+        .clone()
     }
 
     fn load_texture(&self, uri: &str, texture_type: TextureType) -> SceneResult<Texture> {
@@ -636,8 +637,8 @@ impl TextureCache {
 
     pub fn total_texture_data_size(&self) -> usize {
         self.textures
-            .values()
-            .map(|texture| texture.data.len())
+            .iter()
+            .map(|item| item.value().get().unwrap().data.len())
             .sum()
     }
 }
