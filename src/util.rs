@@ -32,12 +32,6 @@ pub fn tonemap_aces(color: Vec3x4) -> Vec3x4 {
     }
 }
 
-#[allow(dead_code)]
-pub fn tonemap_reinhard(color: Vec3x4) -> Vec3x4 {
-    let denom_rcp = (color + Vec3x4::ONE).recip();
-    color * denom_rcp
-}
-
 pub fn tonemap_unreal(color: Vec3x4) -> Vec3x4 {
     // Unreal 3, Documentation: "Color Grading"
     // Adapted to be close to Tonemap_ACES, with similar range

@@ -162,10 +162,6 @@ impl Vec3x4 {
     pub fn extract_lane(&self, lane: usize) -> Vec3A {
         Vec3A::new(self.x[lane], self.y[lane], self.z[lane])
     }
-
-    pub fn recip(&self) -> Vec3x4 {
-        Vec3x4::new(self.x.recip(), self.y.recip(), self.z.recip())
-    }
 }
 
 impl Add for Vec3x4 {
