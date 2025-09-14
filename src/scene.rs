@@ -582,12 +582,7 @@ impl Material {
                 material.emissive_factor()[2],
             ),
             emissive_texture: material.emissive_texture().and_then(|tex| {
-                get_texture_and_sampler(
-                    &tex.texture(),
-                    document,
-                    texture_cache,
-                    TextureType::SRGB,
-                )
+                get_texture_and_sampler(&tex.texture(), document, texture_cache, TextureType::SRGB)
             }),
             occlusion_texture: material.occlusion_texture().and_then(|tex| {
                 get_texture_and_sampler(

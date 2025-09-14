@@ -1,5 +1,5 @@
 use glam::{BVec4A, Mat4, Vec3A, Vec4};
-use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -91,6 +91,7 @@ impl Vec3x4 {
         self.x * self.x + self.y * self.y + self.z * self.z
     }
 
+    #[allow(dead_code)]
     pub fn sqrt(&self) -> Vec3x4 {
         Vec3x4::new(sqrt_vec(self.x), sqrt_vec(self.y), sqrt_vec(self.z))
     }
@@ -172,6 +173,14 @@ impl Add for Vec3x4 {
 
     fn add(self, other: Self) -> Self {
         Self::new(self.x + other.x, self.y + other.y, self.z + other.z)
+    }
+}
+
+impl Add<f32> for Vec3x4 {
+    type Output = Self;
+
+    fn add(self, other: f32) -> Self {
+        Self::new(self.x + other, self.y + other, self.z + other)
     }
 }
 
@@ -292,5 +301,21 @@ impl MulAssign<f32> for Vec3x4 {
         self.x *= scalar;
         self.y *= scalar;
         self.z *= scalar;
+    }
+}
+
+impl Div for Vec3x4 {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        Self::new(self.x / other.x, self.y / other.y, self.z / other.z)
+    }
+}
+
+impl Div<f32> for Vec3x4 {
+    type Output = Self;
+
+    fn div(self, scalar: f32) -> Self {
+        Self::new(self.x / scalar, self.y / scalar, self.z / scalar)
     }
 }

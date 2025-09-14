@@ -38,6 +38,30 @@ pub fn tonemap_reinhard(color: Vec3x4) -> Vec3x4 {
     color * denom_rcp
 }
 
+pub fn tonemap_unreal(color: Vec3x4) -> Vec3x4 {
+    // Unreal 3, Documentation: "Color Grading"
+    // Adapted to be close to Tonemap_ACES, with similar range
+    // Gamma 2.2 correction is baked in, don't use with sRGB conversion
+    color / (color + 0.155) * 1.019
+}
+
+pub fn srgb_to_linear_scalar(scalar: f32) -> f32 {
+    if scalar <= 0.04045 {
+        scalar / 12.92
+    } else {
+        f32::powf((scalar + 0.055) / 1.055, 2.4)
+    }
+}
+
+pub fn srgb_to_linear(color: Vec4) -> Vec4 {
+    Vec4::new(
+        srgb_to_linear_scalar(color.x),
+        srgb_to_linear_scalar(color.y),
+        srgb_to_linear_scalar(color.z),
+        color.w,
+    )
+}
+
 // Gather functions for Vec<f32> and Vec<u32>
 
 pub trait GatherU32 {

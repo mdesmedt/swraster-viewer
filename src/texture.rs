@@ -515,7 +515,9 @@ impl TextureCache {
                                 if texture_type == TextureType::SRGB
                                     || texture_type == TextureType::Cubemap
                                 {
-                                    data.push(Vec4::new(r * r, g * g, b * b, a));
+                                    let srgb = Vec4::new(r, g, b, a);
+                                    let linear = srgb_to_linear(srgb);
+                                    data.push(linear);
                                 } else {
                                     data.push(Vec4::new(r, g, b, a));
                                 }
