@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-glam = "0.30.3"
+glam = "0.30.5"
 gltf = { version = "1.4.1", features = ["KHR_materials_transmission"] }
-image = "0.25.6"
+image = "0.25.8"
 pixels = { git = "https://github.com/mdesmedt/pixels.git", branch = "scalingmode" }
-winit = "0.30.11"
+winit = "0.30.12"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
 crossbeam-utils = "0.8.21"
-rayon = "1.10.0"
-boxcar = "0.2.13"
+rayon = "1.11.0"
+boxcar = "0.2.14"
 ordered-float = "5.0.0"
-parry3d = "0.21.1"
-clap = { version = "4.5.40", features = ["derive"] }
+parry3d = "0.24.0"
+clap = { version = "4.5.47", features = ["derive"] }
 
 [profile.profiling]
 inherits = "release"
