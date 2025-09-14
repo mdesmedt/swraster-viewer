@@ -284,9 +284,7 @@ impl Renderer {
                                     buffer_rows[dst_offset] = r;
                                     buffer_rows[dst_offset + 1] = g;
                                     buffer_rows[dst_offset + 2] = b;
-
-                                    // Assume A is never written to
-                                    //buffer_row[offset + 3] = 0xFF;
+                                    buffer_rows[dst_offset + 3] = 0xFF;
                                 }
                             }
                         }
