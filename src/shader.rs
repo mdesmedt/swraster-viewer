@@ -206,18 +206,20 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let light_specular = specular_brdf * n_dot_l * n_dot_v * voxel_light_intensity;
     let color_specular = brdf_f * light_specular;
 
-    // Compute diffuse lighting
-    // NOTE: There's a bit of a hack here doing some work before TRANSLUCENT and some
-    // work after, to simply adding translucencies in.
-    let mut color_diffuse = light_color * light_diffuse * (Vec4::ONE - metallic);
-
-    // Add ambient diffuse lighting
+    // Diffuse ambient
     // TODO: Arbitrary ambient. Sample properly filtered cubemap instead
     let ambient_top: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.15);
     let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.1);
     let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
     let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
-    color_diffuse += ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
+    let diffuse_ambient = ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
+
+    // Compute diffuse lighting color
+    // NOTE: There's a bit of a hack here doing some work before TRANSLUCENT and some
+    // work after, to simply adding translucencies in.
+     // TODO: Temporary hack until we get prefiltered env maps
+    let metallic_diffuse = Vec4::ONE - metallic + 0.2 * metallic;
+    let mut color_diffuse = (light_color * light_diffuse + diffuse_ambient) * metallic_diffuse;
 
     // For translucent materials, blend in the current framebuffer color
     if TRANSLUCENT {
@@ -255,7 +257,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let cubemap_color = scene
         .cubemap
         .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
-    color += cubemap_color * f0;
+    color += cubemap_color * brdf_f;
 
     // Debug: Show world space position
     //color = pos_world;
