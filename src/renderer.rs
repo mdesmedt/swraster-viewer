@@ -264,7 +264,7 @@ impl Renderer {
                         color *= Vec3x4::splat(1.25);
 
                         // Tonemap to sRGB
-                        color = tonemap_unreal(color);
+                        color = tonemap(color);
 
                         // Iterate over each pixel in the quad
                         for sub_y in 0..2 {

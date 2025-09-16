@@ -32,11 +32,10 @@ pub fn tonemap_aces(color: Vec3x4) -> Vec3x4 {
     }
 }
 
-pub fn tonemap_unreal(color: Vec3x4) -> Vec3x4 {
-    // Unreal 3, Documentation: "Color Grading"
-    // Adapted to be close to Tonemap_ACES, with similar range
-    // Gamma 2.2 correction is baked in, don't use with sRGB conversion
-    color / (color + 0.155) * 1.019
+pub fn tonemap(color: Vec3x4) -> Vec3x4 {
+    // Contrast control
+    let k = 0.2;
+    color / (color + k) * (1.0 + k)
 }
 
 pub fn srgb_to_linear_scalar(scalar: f32) -> f32 {
