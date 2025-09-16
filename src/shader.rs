@@ -150,6 +150,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let half_vector = (light_dir + view_normal).normalize();
     let n_dot_h = normal_world.dot(half_vector).max(Vec4::ZERO);
     let n_dot_v = normal_world.dot(view_normal).max(Vec4::ZERO);
+    let v_dot_h = view_normal.dot(half_vector).max(Vec4::ZERO);
 
     // Get voxel grid lighting if available, for shadows
     let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
@@ -158,10 +159,10 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         Vec4::ONE
     };
 
+    // Compute N.L diffuse lighting with shadow
     let light_diffuse = n_dot_l * voxel_light_intensity;
 
-    // Diffuse starts with the base color factor
-    let mut color_diffuse = Vec3x4::from_f32(
+    let mut base_color_diffuse = Vec3x4::from_f32(
         material.base_color_factor.x,
         material.base_color_factor.y,
         material.base_color_factor.z,
@@ -169,7 +170,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        color_diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        base_color_diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
     }
 
     let mut roughness = Vec4::splat(material.roughness_factor);
@@ -182,33 +183,41 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         metallic *= metallic_roughness_mat.z;
     }
 
-    // Handy inverse roughness and inverse metallic factors
-    let shininess = Vec4::ONE - roughness;
-    let dielectric = Vec4::ONE - metallic;
+    // Compute f0 for dielectrics (0.04) or base color for metals
+    let f0 = Vec3x4::lerp(Vec3x4::splat(0.04), base_color_diffuse, metallic);
+
+    // Compute Schlick Fresnel
+    let one_minus_vh = Vec4::ONE - v_dot_h;
+    let one_minus_vh2 = one_minus_vh * one_minus_vh;
+    let one_minus_vh4 = one_minus_vh2 * one_minus_vh2;
+    let one_minus_vh5 = one_minus_vh4 * one_minus_vh; // (1 - V·H)^5
+    let brdf_f = f0 + (Vec3x4::ONE - f0) * one_minus_vh5;
 
     // Compute GGX D
     let alpha = roughness * roughness;
     let alpha_2 = alpha * alpha;
     let ndh_2 = n_dot_h * n_dot_h;
     let denom_d = ndh_2 * (alpha_2 - Vec4::ONE) + Vec4::ONE;
-    let ggx_d = alpha_2 / (PI * (denom_d * denom_d) + EPS);
+    let brdf_d = alpha_2 / (PI * (denom_d * denom_d) + EPS);
 
-    // Compute specular (only D)
+    // Compute specular (D and F terms)
     let denom_spec = Vec4::splat(4.0) * n_dot_l * n_dot_v + EPS;
-    let specular_brdf = ggx_d / denom_spec;
+    let specular_brdf = brdf_d / denom_spec;
     let light_specular = specular_brdf * n_dot_l * n_dot_v * voxel_light_intensity;
+    let color_specular = brdf_f * light_specular;
 
-    // Now compute the color, starting with diffuse lighting
-    // TODO: This is wrong for metallic
-    let mut color = light_color * light_diffuse;
+    // Compute diffuse lighting
+    // NOTE: There's a bit of a hack here doing some work before TRANSLUCENT and some
+    // work after, to simply adding translucencies in.
+    let mut color_diffuse = light_color * light_diffuse * (Vec4::ONE - metallic);
 
     // Add ambient diffuse lighting
-    // TODO: Arbitrary ambient. Sample filtered cubemap instead?
+    // TODO: Arbitrary ambient. Sample properly filtered cubemap instead
     let ambient_top: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.15);
     let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.1);
     let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
     let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
-    color += ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
+    color_diffuse += ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
 
     // For translucent materials, blend in the current framebuffer color
     if TRANSLUCENT {
@@ -222,39 +231,31 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
         // Multiply 1-transmission to diffuse lighting
         let inv_transmission = Vec4::ONE - transmission;
-        color *= inv_transmission;
+        color_diffuse *= inv_transmission;
 
         // Add the transmitted color multiplied by the transmission factor
-        color += shading_params.current_color * transmission;
+        color_diffuse += shading_params.current_color * transmission;
     }
 
-    // Multiply by diffuse color
-    color *= color_diffuse;
+    // Multiply by diffuse base color
+    color_diffuse *= base_color_diffuse;
 
-    // Add dielectric specular
-    color += light_specular * dielectric;
+    // Assemble lit color
+    let mut color = color_diffuse + color_specular;
 
-    // Add metallic specular
-    color += color_diffuse * light_specular * metallic;
-
-    // Sample emissive texture if provided
+    // Sample and add emissive texture if provided
     if let Some(emissive_texture) = &material.emissive_texture {
         let emissive_mat = emissive_texture.sample4_rgb(uv_x, uv_y, du_dv);
         color += emissive_mat * material.emissive_factor;
     }
 
-    // Sample cubemap (with some totally arbitrary weighting)
+    // Sample global cubemap for reflections
     let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
     let reflect = view_normal.reflect(normal_world);
     let cubemap_color = scene
         .cubemap
         .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
-    let shininess_2 = shininess * shininess;
-    let shininess_4 = shininess_2 * shininess_2;
-    // Add dielectric cubemap contribution
-    color += cubemap_color * dielectric * shininess_4 * Vec4::splat(0.2);
-    // Add metallic cubemap contribution
-    color += cubemap_color * metallic * color_diffuse * shininess;
+    color += cubemap_color * f0;
 
     // Debug: Show world space position
     //color = pos_world;
