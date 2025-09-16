@@ -105,8 +105,11 @@ impl<'a> PbrShaderParams<'a> {
     }
 }
 
-/// Calculates pseudo-PBR shading and returns a packed color
 pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> Vec3x4 {
+    const EPS: Vec4 = Vec4::splat(1e-6);
+    const PI: Vec4 = Vec4::splat(std::f32::consts::PI);
+
+    // Fetch parameters from the struct for convenience
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
     let light_dir = shading_params.light_dir;
@@ -116,10 +119,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let camera = shading_params.camera;
     let scene = shading_params.scene;
 
-    // Begin attribute interpolation
-
+    // Attribute interpolation
     let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
-
     let input_normal = packet.normals.interpolate(bary1, bary2).normalize();
     let input_tangent = packet.tangents.interpolate(bary1, bary2).normalize();
     let pos_world = packet.pos_world_over_w.interpolate(bary1, bary2) * w;
@@ -139,23 +140,16 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     }
 
     // Compute N.L diffuse lighting
-    let n_dot_l = normal_world.dot(light_dir).clamp(Vec4::ZERO, Vec4::ONE);
+    let n_dot_l = normal_world.dot(light_dir).max(Vec4::ZERO);
 
     // Compute the view direction for each pixel
     let view_dir = Vec3x4::from_vec3a(camera.position) - pos_world;
     let view_normal = view_dir.normalize();
-    // Compute half vector
-    let half_vector_add = light_dir + view_normal;
-    // Normalize half vector
-    let half_vector = half_vector_add.normalize();
-    // H.N
-    let n_dot_h = normal_world.dot(half_vector);
-    // Exponentiate
-    let n_dot_h_2 = n_dot_h * n_dot_h;
-    let n_dot_h_4 = n_dot_h_2 * n_dot_h_2;
-    let n_dot_h_8 = n_dot_h_4 * n_dot_h_4;
-    let n_dot_h_16 = n_dot_h_8 * n_dot_h_8;
-    let n_dot_h_32 = n_dot_h_16 * n_dot_h_16;
+
+    // Parameters for diffuse and specular lighting
+    let half_vector = (light_dir + view_normal).normalize();
+    let n_dot_h = normal_world.dot(half_vector).max(Vec4::ZERO);
+    let n_dot_v = normal_world.dot(view_normal).max(Vec4::ZERO);
 
     // Get voxel grid lighting if available, for shadows
     let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
@@ -164,10 +158,10 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         Vec4::ONE
     };
 
-    let light_intensity = n_dot_l * voxel_light_intensity;
+    let light_diffuse = n_dot_l * voxel_light_intensity;
 
     // Diffuse starts with the base color factor
-    let mut diffuse = Vec3x4::from_f32(
+    let mut color_diffuse = Vec3x4::from_f32(
         material.base_color_factor.x,
         material.base_color_factor.y,
         material.base_color_factor.z,
@@ -175,7 +169,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        color_diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
     }
 
     let mut roughness = Vec4::splat(material.roughness_factor);
@@ -192,15 +186,21 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let shininess = Vec4::ONE - roughness;
     let dielectric = Vec4::ONE - metallic;
 
-    // Compute specular
-    let specular_shiny = n_dot_h_32;
-    let specular_rough = n_dot_h_2 * Vec4::splat(0.01);
-    let n_dot_h_blend = specular_shiny * shininess + specular_rough * roughness;
-    let specular = n_dot_h_blend * voxel_light_intensity;
+    // Compute GGX D
+    let alpha = roughness * roughness;
+    let alpha_2 = alpha * alpha;
+    let ndh_2 = n_dot_h * n_dot_h;
+    let denom_d = ndh_2 * (alpha_2 - Vec4::ONE) + Vec4::ONE;
+    let ggx_d = alpha_2 / (PI * (denom_d * denom_d) + EPS);
+
+    // Compute specular (only D)
+    let denom_spec = Vec4::splat(4.0) * n_dot_l * n_dot_v + EPS;
+    let specular_brdf = ggx_d / denom_spec;
+    let light_specular = specular_brdf * n_dot_l * n_dot_v * voxel_light_intensity;
 
     // Now compute the color, starting with diffuse lighting
     // TODO: This is wrong for metallic
-    let mut color = light_color * light_intensity;
+    let mut color = light_color * light_diffuse;
 
     // Add ambient diffuse lighting
     // TODO: Arbitrary ambient. Sample filtered cubemap instead?
@@ -229,13 +229,13 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     }
 
     // Multiply by diffuse color
-    color *= diffuse;
+    color *= color_diffuse;
 
     // Add dielectric specular
-    color += specular * dielectric;
+    color += light_specular * dielectric;
 
     // Add metallic specular
-    color += diffuse * specular * metallic;
+    color += color_diffuse * light_specular * metallic;
 
     // Sample emissive texture if provided
     if let Some(emissive_texture) = &material.emissive_texture {
@@ -254,7 +254,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Add dielectric cubemap contribution
     color += cubemap_color * dielectric * shininess_4 * Vec4::splat(0.2);
     // Add metallic cubemap contribution
-    color += cubemap_color * metallic * diffuse * shininess;
+    color += cubemap_color * metallic * color_diffuse * shininess;
 
     // Debug: Show world space position
     //color = pos_world;
