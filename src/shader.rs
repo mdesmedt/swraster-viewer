@@ -131,12 +131,12 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Apply normal mapping if we have a normal map
     let mut normal_world = input_normal;
     if let Some(normal_map) = &material.normal_texture {
-        let mut tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv) * 2.0 - 1.0;
-        tangent_space_normal = tangent_space_normal.normalize();
+        let tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv);
         let binormal = input_normal.cross(input_tangent);
         normal_world = input_tangent * tangent_space_normal.x
             + binormal * tangent_space_normal.y
             + input_normal * tangent_space_normal.z;
+        normal_world = normal_world.normalize();
     }
 
     // Compute N.L diffuse lighting

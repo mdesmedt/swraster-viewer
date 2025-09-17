@@ -1,7 +1,7 @@
 use crate::math::*;
 use crate::util::*;
 use dashmap::DashMap;
-use glam::{UVec4, Vec3A, Vec4};
+use glam::{UVec4, Vec4};
 use std::sync::{Arc, OnceLock};
 
 use crate::scene::{SceneError, SceneResult};
@@ -84,15 +84,6 @@ impl Texture {
                                 let l11 = p11 * p11;
                                 let avg = (l00 + l10 + l01 + l11) / 4.0;
                                 sqrt_vec(avg)
-                            }
-                            TextureType::Normal => {
-                                let n00 = Vec3A::from_vec4(p00) * 2.0 - Vec3A::ONE;
-                                let n10 = Vec3A::from_vec4(p10) * 2.0 - Vec3A::ONE;
-                                let n01 = Vec3A::from_vec4(p01) * 2.0 - Vec3A::ONE;
-                                let n11 = Vec3A::from_vec4(p11) * 2.0 - Vec3A::ONE;
-                                let normal = (n00 + n10 + n01 + n11).normalize();
-                                let tangent_space = (normal + Vec3A::ONE) * Vec3A::splat(0.5);
-                                tangent_space.extend(0.0)
                             }
                             TextureType::MetallicRoughness => {
                                 let metallic = (p00.y + p10.y + p01.y + p11.y) / 4.0;
@@ -554,11 +545,16 @@ impl TextureCache {
                         let g = chunk[1] as f32 / 255.0;
                         let b = chunk[2] as f32 / 255.0;
                         let a = chunk[3] as f32 / 255.0;
-                        if texture_type == TextureType::SRGB || texture_type == TextureType::Cubemap
-                        {
-                            data.push(Vec4::new(r * r, g * g, b * b, a));
-                        } else {
-                            data.push(Vec4::new(r, g, b, a));
+                        match texture_type {
+                            TextureType::SRGB | TextureType::Cubemap => {
+                                data.push(Vec4::new(r * r, g * g, b * b, a));
+                            }
+                            TextureType::Normal => {
+                                data.push(Vec4::new(r, g, b, a) * 2.0 - 1.0);
+                            }
+                            _ => {
+                                data.push(Vec4::new(r, g, b, a));
+                            }
                         }
                     }
                     Ok(Texture {

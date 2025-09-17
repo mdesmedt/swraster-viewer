@@ -378,6 +378,17 @@ impl Primitive {
             .into_u32()
             .collect();
 
+        let mut texcoords = Vec::new();
+        if let Some(file_texcoords) = reader.read_tex_coords(0) {
+            texcoords = file_texcoords
+                .into_f32()
+                .map(|t| Vec2::new(t[0], t[1]))
+                .collect();
+        } else {
+            // Generate dummy texcoords so the rasterizer doesn't complain
+            texcoords.resize(positions.len(), Vec2::new(0.0, 0.0));
+        }
+
         let normals: Vec<Vec3A> = if let Some(file_normals) = reader.read_normals() {
             file_normals.map(|n| Vec3A::new(n[0], n[1], n[2])).collect()
         } else {
@@ -392,19 +403,12 @@ impl Primitive {
                 .collect()
         } else {
             // Just clone the normals as tangents, without normal mapping it doesn't matter anyway
-            normals.clone()
+            println!("Computing automatic vertex tangents");
+            compute_tangents(&positions, &texcoords, &normals, &indices)
+                .iter()
+                .map(|t| Vec3A::new(t[0], t[1], t[2]))
+                .collect()
         };
-
-        let mut texcoords = Vec::new();
-        if let Some(file_texcoords) = reader.read_tex_coords(0) {
-            texcoords = file_texcoords
-                .into_f32()
-                .map(|t| Vec2::new(t[0], t[1]))
-                .collect();
-        } else {
-            // Generate dummy texcoords so the rasterizer doesn't complain
-            texcoords.resize(positions.len(), Vec2::new(0.0, 0.0));
-        }
 
         let bounding_sphere = compute_bounding_sphere(&positions);
 
@@ -468,6 +472,95 @@ fn compute_smooth_normals(positions: &[Vec4], indices: &[u32]) -> Vec<Vec3A> {
     assert!(normals.len() == positions.len(), "Incorrect normals count");
 
     normals
+}
+
+pub fn compute_tangents(
+    positions: &[Vec4],
+    uvs: &[Vec2],
+    normals: &[Vec3A],
+    indices: &[u32],
+) -> Vec<Vec4> {
+    let vertex_count = positions.len();
+    assert!(uvs.len() == vertex_count && normals.len() == vertex_count);
+
+    // Temporary accumulators
+    let mut tan_acc: Vec<Vec3> = vec![Vec3::ZERO; vertex_count];
+    let mut bit_acc: Vec<Vec3> = vec![Vec3::ZERO; vertex_count];
+
+    // Output tangents
+    let mut out_tangents: Vec<Vec4> = vec![Vec4::ZERO; vertex_count];
+
+    for tri in (0..indices.len()).step_by(3) {
+        let i0 = indices[tri] as usize;
+        let i1 = indices[tri + 1] as usize;
+        let i2 = indices[tri + 2] as usize;
+
+        let p0 = positions[i0].truncate();
+        let p1 = positions[i1].truncate();
+        let p2 = positions[i2].truncate();
+
+        let uv0 = uvs[i0];
+        let uv1 = uvs[i1];
+        let uv2 = uvs[i2];
+
+        // Edges in model space
+        let edge1 = p1 - p0;
+        let edge2 = p2 - p0;
+
+        // Edges in UV space
+        let duv1 = uv1 - uv0;
+        let duv2 = uv2 - uv0;
+
+        // UV area
+        let det = duv1.x * duv2.y - duv2.x * duv1.y;
+
+        // Degenerate triangle
+        if det.abs() < 1e-6 {
+            continue;
+        }
+
+        let tangent = (edge1 * duv2.y - edge2 * duv1.y) / det;
+        let bitangent = (edge2 * duv1.x - edge1 * duv2.x) / det;
+
+        // Accumulate
+        tan_acc[i0] += tangent;
+        tan_acc[i1] += tangent;
+        tan_acc[i2] += tangent;
+
+        bit_acc[i0] += bitangent;
+        bit_acc[i1] += bitangent;
+        bit_acc[i2] += bitangent;
+    }
+
+    for i in 0..vertex_count {
+        let n = normals[i].to_vec3();
+        let t = tan_acc[i];
+
+        // If tangent accumulator is nearly zero, create a fallback tangent
+        if t.length_squared() < 1e-6 {
+            let helper = if n.x.abs() > 0.9 {
+                Vec3::new(0.0, 1.0, 0.0)
+            } else {
+                Vec3::new(1.0, 0.0, 0.0)
+            };
+            let tangent = n.cross(helper).normalize();
+            out_tangents[i] = Vec4::new(tangent.x, tangent.y, tangent.z, 1.0);
+            continue;
+        }
+
+        // Orthonormalize
+        let tangent = (t - n * n.dot(t)).normalize();
+
+        // Compute binormal handedness
+        let b = bit_acc[i];
+        let cross_nt = n.cross(tangent);
+        let handedness = if cross_nt.dot(b) < 0.0 { -1.0 } else { 1.0 };
+
+        // Store tangent
+        out_tangents[i] = Vec4::new(tangent.x, tangent.y, tangent.z, handedness);
+    }
+
+    out_tangents
 }
 
 fn get_texture_and_sampler(
