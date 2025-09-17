@@ -261,7 +261,7 @@ impl Renderer {
                         let mut color = tile.color[src_index as usize];
 
                         // Apply fixed exposure
-                        color *= Vec3x4::splat(2.0);
+                        color *= Vec3x4::splat(3.0);
 
                         // Tonemap to sRGB
                         color = tonemap(color);
