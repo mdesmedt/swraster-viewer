@@ -265,7 +265,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let cubemap_color = scene
         .cubemap
         .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
-    let dielectric_hack = metallic * 0.5 + 0.5; // Temporary hack until proper env maps are implemented
+    let dielectric_hack = metallic * 0.8 + 0.2; // Temporary hack until proper env maps are implemented
     color += cubemap_color * brdf_f * dielectric_hack;
 
     // Debug: Show world space position
