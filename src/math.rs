@@ -72,7 +72,7 @@ impl Vec3x4 {
         Self::new(Vec4::splat(v), Vec4::splat(v), Vec4::splat(v))
     }
 
-    pub fn from_f32(x: f32, y: f32, z: f32) -> Self {
+    pub const fn from_f32(x: f32, y: f32, z: f32) -> Self {
         Self::new(Vec4::splat(x), Vec4::splat(y), Vec4::splat(z))
     }
 
@@ -315,5 +315,13 @@ impl Div<f32> for Vec3x4 {
 
     fn div(self, scalar: f32) -> Self {
         Self::new(self.x / scalar, self.y / scalar, self.z / scalar)
+    }
+}
+
+impl Div<Vec4> for Vec3x4 {
+    type Output = Self;
+
+    fn div(self, vec4: Vec4) -> Self {
+        Self::new(self.x / vec4, self.y / vec4, self.z / vec4)
     }
 }

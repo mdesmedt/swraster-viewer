@@ -211,11 +211,11 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let color_specular = brdf_f * specular_dg * n_dot_l * voxel_light_intensity;
 
     // TODO: Arbitrary diffuse ambient. Sample properly filtered cubemap instead
-    let ambient_top: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.15);
-    let ambient_bottom: Vec3x4 = Vec3x4::from_f32(0.1, 0.1, 0.1);
+    const AMBIENT_TOP: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.075);
+    const AMBIENT_BOTTOM: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.05);
     let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
     let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
-    let diffuse_ambient = ambient_top * ambient_factor_top + ambient_bottom * ambient_factor_bottom;
+    let diffuse_ambient = AMBIENT_TOP * ambient_factor_top + AMBIENT_BOTTOM * ambient_factor_bottom;
 
     // Compute diffuse direct lighting color
     let mut color_diffuse =
