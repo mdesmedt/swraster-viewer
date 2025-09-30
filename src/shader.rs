@@ -203,8 +203,8 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let brdf_d = alpha_2 / (PI * (denom_d * denom_d) + EPS);
 
     // Compute Shlick-GGX G
-    let k = alpha + Vec4::ONE;
-    let k = (k * k) * Vec4::splat(0.125); // (alpha+1)^2 / 8
+    let k = roughness + Vec4::ONE;
+    let k = (k * k) * Vec4::splat(0.125); // (roughness+1)^2 / 8
     let gv_denom = n_dot_v * (Vec4::ONE - k) + k;
     let gv = n_dot_v / (gv_denom + EPS);
     let gl_denom = n_dot_l * (Vec4::ONE - k) + k;
