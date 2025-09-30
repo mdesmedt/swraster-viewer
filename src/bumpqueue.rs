@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-const BLOCK_SIZE: usize = 128;
+const BLOCK_SIZE: usize = 1024;
 const BLOCK_ALLOC_TRIGGER: usize = BLOCK_SIZE - 1;
 
 // A block of data for the Queue and Pool below.
@@ -24,20 +24,19 @@ impl<T> BumpBlock<T> {
     pub fn write(&self, index: usize, value: T) {
         let cell = &self.data[index];
         unsafe {
-            (*cell.get()).write(value);
+            std::ptr::write(cell.get(), MaybeUninit::new(value));
         }
     }
 
     pub fn read(&self, index: usize) -> T {
         let cell = &self.data[index];
-        unsafe { (*cell.get()).assume_init_read() }
+        unsafe { std::ptr::read(cell.get() as *const T) }
     }
 }
 
 // The pool for the Queue implementation below.
 pub struct BumpPool<T> {
-    blocks: boxcar::Vec<BumpBlock<T>>,
-    freelist: SegQueue<usize>,
+    freelist: SegQueue<Arc<BumpBlock<T>>>,
 }
 
 unsafe impl<T: Send> Send for BumpPool<T> {}
@@ -46,25 +45,20 @@ unsafe impl<T: Send> Sync for BumpPool<T> {}
 impl<T> BumpPool<T> {
     pub fn new() -> Self {
         Self {
-            blocks: boxcar::Vec::new(),
             freelist: SegQueue::new(),
         }
     }
 
-    fn alloc_block(&self) -> usize {
-        if let Some(index) = self.freelist.pop() {
-            index
+    fn alloc_block(&self) -> Arc<BumpBlock<T>> {
+        if let Some(block) = self.freelist.pop() {
+            block
         } else {
-            self.blocks.push(BumpBlock::new())
+            Arc::new(BumpBlock::new())
         }
     }
 
-    fn return_block(&self, index: usize) {
-        self.freelist.push(index);
-    }
-
-    fn get_block(&self, index: usize) -> &BumpBlock<T> {
-        &self.blocks[index]
+    fn return_block(&self, block: Arc<BumpBlock<T>>) {
+        self.freelist.push(block);
     }
 }
 
@@ -78,7 +72,7 @@ impl<T> BumpPool<T> {
 //   It load-balances backing memory (blocks) between queues, which saves memory when the workload changes between frames
 pub struct BumpQueue<T> {
     pool: Arc<BumpPool<T>>,
-    blocks: boxcar::Vec<usize>,
+    blocks: boxcar::Vec<Arc<BumpBlock<T>>>,
     count: AtomicUsize,
 }
 
@@ -112,7 +106,7 @@ impl<T> BumpQueue<T> {
         }
 
         // Store the value
-        let block = self.pool.get_block(self.blocks[block_idx]);
+        let block = &self.blocks[block_idx];
         block.write(local_idx, value);
     }
 
@@ -120,14 +114,14 @@ impl<T> BumpQueue<T> {
         debug_assert!(index < self.len());
         let block_idx = index / BLOCK_SIZE;
         let local_idx = index % BLOCK_SIZE;
-        let block = self.pool.get_block(self.blocks[block_idx]);
+        let block = &self.blocks[block_idx];
         block.read(local_idx)
     }
 
     // Return all the blocks to the pool and reset the queue
     pub fn reset(&mut self) {
-        for block in self.blocks.iter() {
-            self.pool.return_block(*block.1);
+        for (_, block) in &self.blocks {
+            self.pool.return_block(block.clone());
         }
         self.blocks.clear();
         self.count.store(0, Ordering::Relaxed);
@@ -191,7 +185,7 @@ impl<T> BumpQueue<T> {
     fn get_value(&self, index: usize) -> T {
         let block_idx = index / BLOCK_SIZE;
         let local_idx = index % BLOCK_SIZE;
-        let block = self.pool.get_block(self.blocks[block_idx]);
+        let block = &self.blocks[block_idx];
         block.read(local_idx)
     }
 
@@ -207,13 +201,13 @@ impl<T> BumpQueue<T> {
         // Write value_j to position i
         let block_idx_i = i / BLOCK_SIZE;
         let local_idx_i = i % BLOCK_SIZE;
-        let block_i = self.pool.get_block(self.blocks[block_idx_i]);
+        let block_i = &self.blocks[block_idx_i];
         block_i.write(local_idx_i, value_j);
 
         // Write temp to position j
         let block_idx_j = j / BLOCK_SIZE;
         let local_idx_j = j % BLOCK_SIZE;
-        let block_j = self.pool.get_block(self.blocks[block_idx_j]);
+        let block_j = &self.blocks[block_idx_j];
         block_j.write(local_idx_j, temp);
     }
 }
