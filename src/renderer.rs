@@ -425,8 +425,8 @@ impl Renderer {
         // Compute normal to world rotation matrix (assume uniform scaling)
         let rotation_matrix = Mat3A::from_mat4(model_matrix);
 
-        // Process triangles in batches of 128
-        const TRIANGLES_PER_BATCH: usize = 128;
+        // Process triangles in batches
+        const TRIANGLES_PER_BATCH: usize = 1024;
         const INDICES_PER_BATCH: usize = TRIANGLES_PER_BATCH * 3;
         indices.par_chunks(INDICES_PER_BATCH).for_each(|batch| {
             for chunk in batch.chunks_exact(3) {

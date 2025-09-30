@@ -16,8 +16,6 @@ pub struct RasterizerShaderParams<'a> {
     pub w: Vec4,
     pub mask: BVec4A,
     pub depth_from_depth_test: Vec4,
-    pub light_dir: Vec3x4,
-    pub light_color: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
     pub camera: &'a RenderCamera,
@@ -80,8 +78,6 @@ impl RasterizerShader for TranslucentForwardShader {
 pub struct PbrShaderParams<'a> {
     pub bary1: Vec4,
     pub bary2: Vec4,
-    pub light_dir: Vec3x4,
-    pub light_color: Vec3x4,
     pub current_color: Vec3x4,
     pub packet: &'a RasterPacket,
     pub material: &'a Material,
@@ -94,8 +90,6 @@ impl<'a> PbrShaderParams<'a> {
         Self {
             bary1: params.bary1,
             bary2: params.bary2,
-            light_dir: params.light_dir,
-            light_color: params.light_color,
             current_color: current_color,
             packet: params.packet,
             material: params.material,
@@ -112,8 +106,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Fetch parameters from the struct for convenience
     let bary1 = shading_params.bary1;
     let bary2 = shading_params.bary2;
-    let light_dir = shading_params.light_dir;
-    let light_color = shading_params.light_color;
     let packet = shading_params.packet;
     let material = shading_params.material;
     let camera = shading_params.camera;
@@ -138,6 +130,19 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
             + input_normal * tangent_space_normal.z;
         normal_world = normal_world.normalize();
     }
+
+    // Fetch the light
+    let light = &scene.light;
+    let light_dir = Vec3x4::new(
+        Vec4::splat(light.direction.x),
+        Vec4::splat(light.direction.y),
+        Vec4::splat(light.direction.z),
+    );
+    let light_color = Vec3x4::new(
+        Vec4::splat(light.color.x),
+        Vec4::splat(light.color.y),
+        Vec4::splat(light.color.z),
+    );
 
     // Compute N.L diffuse lighting
     let n_dot_l = normal_world.dot(light_dir).max(Vec4::ZERO);
