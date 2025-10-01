@@ -634,7 +634,7 @@ impl TextureCache {
     pub fn total_texture_data_size(&self) -> usize {
         self.textures
             .iter()
-            .map(|item| item.value().get().unwrap().data.len())
+            .map(|item| item.value().get().unwrap().data.len() * std::mem::size_of::<Vec4>())
             .sum()
     }
 }
