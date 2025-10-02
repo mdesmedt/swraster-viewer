@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // Size (width and height) of raster tiles in pixels
-const TILE_SIZE: i32 = 32;
+const TILE_SIZE: i32 = 64;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -199,15 +199,34 @@ impl Renderer {
             let node = &scene.nodes[*node_index];
             self.render_node(scene, camera, node, camera.view_project_matrix);
         });
-        self.timer_clipbin += clipbin_start.elapsed();
+        let clipbin_time = clipbin_start.elapsed();
+        self.timer_clipbin += clipbin_time;
 
-        // Rasterize each bin
-        // One thread per bin avoids having to lock the tile constantly
+        // Rasterize bins with one job per tile
         let rasterizer_start = Instant::now();
-        self.tiles.par_iter_mut().for_each(|tile| {
+        self.tiles.par_iter_mut().with_max_len(1).for_each(|tile| {
             tile.render_tile(scene, camera);
         });
-        self.timer_rasterizer += rasterizer_start.elapsed();
+        let rasterizer_time = rasterizer_start.elapsed();
+        self.timer_rasterizer += rasterizer_time;
+
+        // Stutter detection (2x the average)
+        if self.frame_count > 0 {
+            let clipbin_avg = self.timer_clipbin.as_secs_f64() / self.frame_count as f64;
+            let rasterizer_avg = self.timer_rasterizer.as_secs_f64() / self.frame_count as f64;
+            if clipbin_time > Duration::from_secs_f64(clipbin_avg * 2.0) {
+                println!(
+                    "Clipping stutter: {:.2}ms",
+                    clipbin_time.as_secs_f64() * 1000.0
+                );
+            }
+            if rasterizer_time > Duration::from_secs_f64(rasterizer_avg * 2.0) {
+                println!(
+                    "Rasterization stutter: {:.2}ms",
+                    rasterizer_time.as_secs_f64() * 1000.0
+                );
+            }
+        }
 
         let now = Instant::now();
         if now.duration_since(self.last_print_time) >= Duration::from_secs(1) {
@@ -230,9 +249,11 @@ impl Renderer {
     // Copy all tiles pixels to the backbuffer
     pub fn blit_to_buffer(&self, buffer: &mut RenderBuffer) {
         let num_tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
+        let chunk_size = buffer.width * 4 * 2; // 2 rows of quads
         buffer
             .pixels
-            .par_chunks_exact_mut(buffer.width * 4 * 2) // 2 rows of quads
+            .par_chunks_exact_mut(chunk_size)
+            .with_min_len(chunk_size)
             .enumerate()
             .for_each(|(quad_y_index, buffer_rows)| {
                 let quad_y = quad_y_index as i32;
@@ -332,22 +353,20 @@ impl Renderer {
     ) {
         // Render opaque primitives
         let mesh = &scene.meshes[mesh_index];
-        mesh.primitives_opaque
-            .par_iter()
-            .for_each(|primitive_index| {
-                self.render_primitive::<true>(
-                    scene,
-                    camera,
-                    mesh_index,
-                    *primitive_index,
-                    model_matrix,
-                    mvp_matrix,
-                );
-            });
+        mesh.primitives_opaque.iter().for_each(|primitive_index| {
+            self.render_primitive::<true>(
+                scene,
+                camera,
+                mesh_index,
+                *primitive_index,
+                model_matrix,
+                mvp_matrix,
+            );
+        });
 
         // Render translucent primitives
         mesh.primitives_translucent
-            .par_iter()
+            .iter()
             .for_each(|primitive_index| {
                 self.render_primitive::<false>(
                     scene,
@@ -426,14 +445,15 @@ impl Renderer {
         let rotation_matrix = Mat3A::from_mat4(model_matrix);
 
         // Process triangles in batches
-        const TRIANGLES_PER_BATCH: usize = 1024;
-        const INDICES_PER_BATCH: usize = TRIANGLES_PER_BATCH * 3;
-        indices.par_chunks(INDICES_PER_BATCH).for_each(|batch| {
-            for chunk in batch.chunks_exact(3) {
-                // Read indices
-                let i0 = chunk[0] as usize;
-                let i1 = chunk[1] as usize;
-                let i2 = chunk[2] as usize;
+        const TRIANGLES_PER_BATCH: usize = 128;
+        let num_triangles = indices.len() / 3;
+        (0..num_triangles)
+            .into_par_iter()
+            .with_min_len(TRIANGLES_PER_BATCH)
+            .for_each(|tri_idx| {
+                let i0 = indices[tri_idx * 3] as usize;
+                let i1 = indices[tri_idx * 3 + 1] as usize;
+                let i2 = indices[tri_idx * 3 + 2] as usize;
 
                 // Read vertices
                 let local0 = positions[i0];
@@ -495,8 +515,7 @@ impl Renderer {
                     // Bin the triangle without clipping
                     self.bin_triangle::<MODE_OPAQUE>(triangle);
                 }
-            }
-        });
+            });
     }
 
     // Clips a triangle against all 6 frustum planes in clip space
