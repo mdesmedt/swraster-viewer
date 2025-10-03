@@ -2,10 +2,10 @@ use crossbeam::queue::SegQueue;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::sync::Arc;
 
 const BLOCK_SIZE: usize = 1024;
-const BLOCK_ALLOC_TRIGGER: usize = BLOCK_SIZE - 1;
 
 // A block of data for the Queue and Pool below.
 struct BumpBlock<T> {
@@ -72,41 +72,42 @@ impl<T> BumpPool<T> {
 //   It load-balances backing memory (blocks) between queues, which saves memory when the workload changes between frames
 pub struct BumpQueue<T> {
     pool: Arc<BumpPool<T>>,
-    blocks: boxcar::Vec<Arc<BumpBlock<T>>>,
+    blocks: [boxcar::Vec<Arc<BumpBlock<T>>>; 2],
     count: AtomicUsize,
+    frame: usize,
+    alloc_lock: Mutex<()>,
 }
 
 impl<T> BumpQueue<T> {
     pub fn new(pool: Arc<BumpPool<T>>) -> Self {
         Self {
             pool,
-            blocks: boxcar::Vec::new(),
+            blocks: [boxcar::Vec::new(), boxcar::Vec::new()],
             count: AtomicUsize::new(0),
+            frame: 0,
+            alloc_lock: Mutex::new(()),
         }
     }
 
+    fn get_blocks(&self) -> &boxcar::Vec<Arc<BumpBlock<T>>> {
+        &self.blocks[self.frame]
+    }
+
     pub fn push(&self, value: T) {
-        let backoff = crossbeam_utils::Backoff::new();
         let idx = self.count.fetch_add(1, Ordering::Relaxed);
         let block_idx = idx / BLOCK_SIZE;
         let local_idx = idx % BLOCK_SIZE;
 
-        if idx == 0 {
-            // First push, allocate a block
-            self.blocks.push(self.pool.alloc_block());
-        } else if local_idx == BLOCK_ALLOC_TRIGGER {
-            // Allocate a new block expecting the next push
-            self.blocks.push(self.pool.alloc_block());
-        }
-
-        // Spin until we have enough blocks
-        while self.blocks.count() <= block_idx {
-            // Waiting for the previous push to add a block
-            backoff.snooze();
+        // Ensure we have enough blocks
+        while self.get_blocks().count() <= block_idx {
+            let _guard = self.alloc_lock.lock().unwrap();
+            if self.get_blocks().count() <= block_idx {
+                self.get_blocks().push(self.pool.alloc_block());
+            }
         }
 
         // Store the value
-        let block = &self.blocks[block_idx];
+        let block = &self.get_blocks()[block_idx];
         block.write(local_idx, value);
     }
 
@@ -114,16 +115,35 @@ impl<T> BumpQueue<T> {
         debug_assert!(index < self.len());
         let block_idx = index / BLOCK_SIZE;
         let local_idx = index % BLOCK_SIZE;
-        let block = &self.blocks[block_idx];
+        let block = &self.get_blocks()[block_idx];
         block.read(local_idx)
     }
 
-    // Return all the blocks to the pool and reset the queue
+    // Return only fully empty blocks to the pool and reset the queue
+    // Keep blocks that have been used this frame for reuse
     pub fn reset(&mut self) {
-        for (_, block) in &self.blocks {
-            self.pool.return_block(block.clone());
+        let used_count = self.count.load(Ordering::Relaxed);
+        let used_blocks = (used_count + BLOCK_SIZE - 1) / BLOCK_SIZE; // Round up to get needed blocks
+
+        let frame_next = (self.frame + 1) % 2;
+        
+        // Move blocks we want to keep to the next frame, return the rest to the pool
+        for block_idx in 0..self.get_blocks().count() {
+            let block = self.get_blocks()[block_idx].clone();
+            if block_idx < used_blocks {
+                self.blocks[frame_next].push(block);
+            } else {
+                self.pool.return_block(block);
+            }
         }
-        self.blocks.clear();
+
+        // Clear blocks in the current frame
+        self.blocks[self.frame].clear();
+
+        // Switch to the next frame
+        self.frame = frame_next;
+
+        // Reset the count
         self.count.store(0, Ordering::Relaxed);
     }
 
@@ -185,7 +205,7 @@ impl<T> BumpQueue<T> {
     fn get_value(&self, index: usize) -> T {
         let block_idx = index / BLOCK_SIZE;
         let local_idx = index % BLOCK_SIZE;
-        let block = &self.blocks[block_idx];
+        let block = &self.get_blocks()[block_idx];
         block.read(local_idx)
     }
 
@@ -201,13 +221,13 @@ impl<T> BumpQueue<T> {
         // Write value_j to position i
         let block_idx_i = i / BLOCK_SIZE;
         let local_idx_i = i % BLOCK_SIZE;
-        let block_i = &self.blocks[block_idx_i];
+        let block_i = &self.get_blocks()[block_idx_i];
         block_i.write(local_idx_i, value_j);
 
         // Write temp to position j
         let block_idx_j = j / BLOCK_SIZE;
         let local_idx_j = j % BLOCK_SIZE;
-        let block_j = &self.blocks[block_idx_j];
+        let block_j = &self.get_blocks()[block_idx_j];
         block_j.write(local_idx_j, temp);
     }
 }

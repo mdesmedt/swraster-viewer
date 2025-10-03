@@ -2672,7 +2672,6 @@ dependencies = [
  "clap",
  "crossbeam",
  "crossbeam-channel",
- "crossbeam-utils",
  "dashmap",
  "glam 0.30.5",
  "gltf",
