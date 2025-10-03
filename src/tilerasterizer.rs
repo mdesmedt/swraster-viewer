@@ -85,7 +85,6 @@ impl TileRasterizer {
         let y_start_subpixels = y_start_pixels * SUBPIXEL_SCALE;
         let x_end_subpixels = packet.screen_max_pixels.x * SUBPIXEL_SCALE;
         let y_end_subpixels = packet.screen_max_pixels.y * SUBPIXEL_SCALE;
-        let mut p = IVec2::new(x_start_subpixels, y_start_subpixels);
 
         // Fetch the material
         let mesh_index = packet.mesh_index as usize;
@@ -139,85 +138,139 @@ impl TileRasterizer {
         let step_y12 = Vec4::splat((b12 * STEP_Y_SIZE) as f32);
         let step_y20 = Vec4::splat((b20 * STEP_Y_SIZE) as f32);
 
-        // Initial edge function values at the starting pixel block with half-pixel offset
-        let x = Vec4::new(
-            (p.x + HALF_PIXEL) as f32,
-            (p.x + ONE_HALF_PIXEL) as f32,
-            (p.x + HALF_PIXEL) as f32,
-            (p.x + ONE_HALF_PIXEL) as f32,
-        );
-        let y = Vec4::new(
-            (p.y + HALF_PIXEL) as f32,
-            (p.y + HALF_PIXEL) as f32,
-            (p.y + ONE_HALF_PIXEL) as f32,
-            (p.y + ONE_HALF_PIXEL) as f32,
-        );
+        // Coarse raster the triangle in 8x8 pixel blocks
+        const COARSE_BLOCK_SIZE: i32 = 8 * SUBPIXEL_SCALE;
+        let mut block_y = y_start_subpixels;
+        while block_y < y_end_subpixels {
+            let mut block_x = x_start_subpixels;
+            while block_x < x_end_subpixels {
+                // Build block corner positions
+                let cx = Vec4::new(
+                    (block_x + HALF_PIXEL) as f32,
+                    (block_x + COARSE_BLOCK_SIZE - HALF_PIXEL) as f32,
+                    (block_x + HALF_PIXEL) as f32,
+                    (block_x + COARSE_BLOCK_SIZE - HALF_PIXEL) as f32,
+                );
+                let cy = Vec4::new(
+                    (block_y + HALF_PIXEL) as f32,
+                    (block_y + HALF_PIXEL) as f32,
+                    (block_y + COARSE_BLOCK_SIZE - HALF_PIXEL) as f32,
+                    (block_y + COARSE_BLOCK_SIZE - HALF_PIXEL) as f32,
+                );
 
-        // Edge function values: w0 = edge v1->v2, w1 = edge v2->v0, w2 = edge v0->v1
-        let mut w0_row =
-            Vec4::splat(a12 as f32) * x + Vec4::splat(b12 as f32) * y + Vec4::splat(c12 as f32);
-        let mut w1_row =
-            Vec4::splat(a20 as f32) * x + Vec4::splat(b20 as f32) * y + Vec4::splat(c20 as f32);
-        let mut w2_row =
-            Vec4::splat(a01 as f32) * x + Vec4::splat(b01 as f32) * y + Vec4::splat(c01 as f32);
+                // Evaluate edge functions at block corners
+                let w0_corners = Vec4::splat(a12 as f32) * cx
+                    + Vec4::splat(b12 as f32) * cy
+                    + Vec4::splat(c12 as f32);
+                let w1_corners = Vec4::splat(a20 as f32) * cx
+                    + Vec4::splat(b20 as f32) * cy
+                    + Vec4::splat(c20 as f32);
+                let w2_corners = Vec4::splat(a01 as f32) * cx
+                    + Vec4::splat(b01 as f32) * cy
+                    + Vec4::splat(c01 as f32);
 
-        // Main loop for rasterizing the triangle
-        while p.y < y_end_subpixels {
-            let mut w0 = w0_row;
-            let mut w1 = w1_row;
-            let mut w2 = w2_row;
-
-            p.x = x_start_subpixels;
-            while p.x < x_end_subpixels {
-                // Test if any pixels are inside the triangle
-                let mask = w0.cmpge(Vec4::ZERO) & w1.cmpge(Vec4::ZERO) & w2.cmpge(Vec4::ZERO);
-                if mask.any() {
-                    // Compute the barycentrics
-                    let bary1: Vec4 = w1 * one_over_area_vec;
-                    let bary2: Vec4 = w2 * one_over_area_vec;
-
-                    // Interpolate w and z
-                    let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
-                    let z = packet.z_over_w.interpolate(bary1, bary2) * w;
-
-                    // Compute pixel coordinate from subpixel
-                    let pixel = p >> SUBPIXEL_SHIFT;
-
-                    // Perform depth test
-                    let (depth, mask) = self.depth_test(pixel, z, mask);
-                    if mask.any() {
-                        let shading_params = RasterizerShaderParams {
-                            index_in_tile: self.index_from_xy(pixel),
-                            packet_index,
-                            z,
-                            w,
-                            bary1,
-                            bary2,
-                            mask,
-                            depth_from_depth_test: depth,
-                            packet,
-                            material,
-                            camera,
-                            scene,
-                        };
-
-                        // Execute shader
-                        shader.shade(shading_params, self);
-                    }
+                // If any edge max < 0 the whole block lies outside the triangle
+                let w0_max = w0_corners.max_element();
+                let w1_max = w1_corners.max_element();
+                let w2_max = w2_corners.max_element();
+                let fully_outside = (w0_max < 0.0) || (w1_max < 0.0) || (w2_max < 0.0);
+                if fully_outside {
+                    // Skip this block
+                    block_x += COARSE_BLOCK_SIZE;
+                    continue;
                 }
 
-                // Step in X
-                w0 += step_x12;
-                w1 += step_x20;
-                w2 += step_x01;
-                p.x += STEP_X_SIZE;
-            }
+                // Fine raster starts here
+                let mut p = IVec2::new(block_x, block_y);
 
-            // Step in Y
-            w0_row += step_y12;
-            w1_row += step_y20;
-            w2_row += step_y01;
-            p.y += STEP_Y_SIZE;
+                // Initial edge function values for the quad at the starting pixel with half-pixel offset
+                let x = Vec4::new(
+                    (p.x + HALF_PIXEL) as f32,
+                    (p.x + ONE_HALF_PIXEL) as f32,
+                    (p.x + HALF_PIXEL) as f32,
+                    (p.x + ONE_HALF_PIXEL) as f32,
+                );
+                let y = Vec4::new(
+                    (p.y + HALF_PIXEL) as f32,
+                    (p.y + HALF_PIXEL) as f32,
+                    (p.y + ONE_HALF_PIXEL) as f32,
+                    (p.y + ONE_HALF_PIXEL) as f32,
+                );
+
+                // Edge function values: w0 = edge v1->v2, w1 = edge v2->v0, w2 = edge v0->v1
+                let mut w0_row = Vec4::splat(a12 as f32) * x
+                    + Vec4::splat(b12 as f32) * y
+                    + Vec4::splat(c12 as f32);
+                let mut w1_row = Vec4::splat(a20 as f32) * x
+                    + Vec4::splat(b20 as f32) * y
+                    + Vec4::splat(c20 as f32);
+                let mut w2_row = Vec4::splat(a01 as f32) * x
+                    + Vec4::splat(b01 as f32) * y
+                    + Vec4::splat(c01 as f32);
+
+                // Main fine raster loop
+                while p.y < block_y + COARSE_BLOCK_SIZE && p.y < y_end_subpixels {
+                    let mut w0 = w0_row;
+                    let mut w1 = w1_row;
+                    let mut w2 = w2_row;
+
+                    p.x = block_x;
+                    while p.x < block_x + COARSE_BLOCK_SIZE && p.x < x_end_subpixels {
+                        // Test if any pixels are inside the triangle
+                        let mask =
+                            w0.cmpge(Vec4::ZERO) & w1.cmpge(Vec4::ZERO) & w2.cmpge(Vec4::ZERO);
+                        if mask.any() {
+                            // Compute the barycentrics
+                            let bary1: Vec4 = w1 * one_over_area_vec;
+                            let bary2: Vec4 = w2 * one_over_area_vec;
+
+                            // Interpolate w and z
+                            let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
+                            let z = packet.z_over_w.interpolate(bary1, bary2) * w;
+
+                            // Compute pixel coordinate from subpixel
+                            let pixel = p >> SUBPIXEL_SHIFT;
+
+                            // Perform depth test
+                            let (depth, mask) = self.depth_test(pixel, z, mask);
+                            if mask.any() {
+                                let shading_params = RasterizerShaderParams {
+                                    index_in_tile: self.index_from_xy(pixel),
+                                    packet_index,
+                                    z,
+                                    w,
+                                    bary1,
+                                    bary2,
+                                    mask,
+                                    depth_from_depth_test: depth,
+                                    packet,
+                                    material,
+                                    camera,
+                                    scene,
+                                };
+
+                                // Execute shader
+                                shader.shade(shading_params, self);
+                            }
+                        }
+
+                        // Step in X
+                        w0 += step_x12;
+                        w1 += step_x20;
+                        w2 += step_x01;
+                        p.x += STEP_X_SIZE;
+                    }
+
+                    // Step in Y
+                    w0_row += step_y12;
+                    w1_row += step_y20;
+                    w2_row += step_y01;
+                    p.y += STEP_Y_SIZE;
+                }
+
+                block_x += COARSE_BLOCK_SIZE;
+            }
+            block_y += COARSE_BLOCK_SIZE;
         }
     }
 

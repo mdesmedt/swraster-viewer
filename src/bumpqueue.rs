@@ -2,8 +2,8 @@ use crossbeam::queue::SegQueue;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 const BLOCK_SIZE: usize = 1024;
 
@@ -126,7 +126,7 @@ impl<T> BumpQueue<T> {
         let used_blocks = (used_count + BLOCK_SIZE - 1) / BLOCK_SIZE; // Round up to get needed blocks
 
         let frame_next = (self.frame + 1) % 2;
-        
+
         // Move blocks we want to keep to the next frame, return the rest to the pool
         for block_idx in 0..self.get_blocks().count() {
             let block = self.get_blocks()[block_idx].clone();
