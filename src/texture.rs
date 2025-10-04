@@ -20,7 +20,7 @@ pub struct Texture {
     pub height: u32,
     pub width_height_vec: Vec4,
     pub texture_type: TextureType,
-    pub data: Vec<Vec4>, // Vec4 floating point data
+    pub data: Vec<u32>, // RGBA8 data
     pub max_mip_level: u32,
     pub max_mip_level_vec: Vec4,
     pub mip_offsets: Vec<u32>,
@@ -71,19 +71,19 @@ impl Texture {
                         let x1 = (x0 + 1).min(prev_width - 1);
                         let y1 = (y0 + 1).min(prev_height - 1);
 
-                        let p00 = self.data[(slice_offset + (y0 * prev_width + x0)) as usize];
-                        let p10 = self.data[(slice_offset + (y0 * prev_width + x1)) as usize];
-                        let p01 = self.data[(slice_offset + (y1 * prev_width + x0)) as usize];
-                        let p11 = self.data[(slice_offset + (y1 * prev_width + x1)) as usize];
+                        let p00 = self.load_vec4((slice_offset + (y0 * prev_width + x0)) as usize);
+                        let p10 = self.load_vec4((slice_offset + (y0 * prev_width + x1)) as usize);
+                        let p01 = self.load_vec4((slice_offset + (y1 * prev_width + x0)) as usize);
+                        let p11 = self.load_vec4((slice_offset + (y1 * prev_width + x1)) as usize);
 
                         let avg = match self.texture_type {
                             TextureType::SRGB => {
-                                let l00 = p00 * p00;
-                                let l10 = p10 * p10;
-                                let l01 = p01 * p01;
-                                let l11 = p11 * p11;
+                                let l00 = srgb_to_linear(p00);
+                                let l10 = srgb_to_linear(p10);
+                                let l01 = srgb_to_linear(p01);
+                                let l11 = srgb_to_linear(p11);
                                 let avg = (l00 + l10 + l01 + l11) / 4.0;
-                                sqrt_vec(avg)
+                                linear_to_srgb_vec4(avg)
                             }
                             TextureType::MetallicRoughness => {
                                 let metallic = (p00.y + p10.y + p01.y + p11.y) / 4.0;
@@ -92,10 +92,18 @@ impl Texture {
                                         / 4.0;
                                 Vec4::new(p00.x, metallic, roughness.sqrt(), p00.w)
                             }
+                            TextureType::Normal => {
+                                let n00 = p00 * 2.0 - 1.0;
+                                let n10 = p10 * 2.0 - 1.0;
+                                let n01 = p01 * 2.0 - 1.0;
+                                let n11 = p11 * 2.0 - 1.0;
+                                let avg = (n00 + n10 + n01 + n11) / 4.0;
+                                (avg + 1.0) / 2.0
+                            }
                             _ => (p00 + p10 + p01 + p11) / 4.0,
                         };
 
-                        self.data.push(avg);
+                        self.data.push(rgba8_pack_vec4(avg));
                     }
                 }
             }
@@ -107,6 +115,10 @@ impl Texture {
             self.max_mip_level += 1;
             self.max_mip_level_vec += Vec4::ONE;
         }
+    }
+
+    pub fn load_vec4(&self, idx: usize) -> Vec4 {
+        rgba8_unpack_vec4(self.data[idx])
     }
 }
 
@@ -205,6 +217,8 @@ impl TextureAndSampler {
     pub fn sample_cubemap_rgb(&self, normal: Vec3x4, mip_level: UVec4) -> Vec3x4 {
         let (u, v, array_slice) = Self::cubemap_uv_from_normal(normal);
 
+        assert!(mip_level.x < 20);
+
         let width_i = self.texture.mip_widths.gather(mip_level);
         let width_f = self.texture.mip_widths_f.gather(mip_level);
         let height_f = self.texture.mip_heights_f.gather(mip_level);
@@ -270,10 +284,10 @@ impl TextureAndSampler {
     }
 
     fn gather_rgb(&self, idx: UVec4) -> Vec3x4 {
-        let a = self.texture.data[idx.x as usize];
-        let b = self.texture.data[idx.y as usize];
-        let c = self.texture.data[idx.z as usize];
-        let d = self.texture.data[idx.w as usize];
+        let a = self.texture.load_vec4(idx.x as usize);
+        let b = self.texture.load_vec4(idx.y as usize);
+        let c = self.texture.load_vec4(idx.z as usize);
+        let d = self.texture.load_vec4(idx.w as usize);
 
         Vec3x4 {
             x: Vec4::new(a.x, b.x, c.x, d.x),
@@ -345,10 +359,10 @@ impl TextureAndSampler {
     }
 
     fn gather_alpha(&self, idx: UVec4) -> Vec4 {
-        let a = self.texture.data[idx.x as usize];
-        let b = self.texture.data[idx.y as usize];
-        let c = self.texture.data[idx.z as usize];
-        let d = self.texture.data[idx.w as usize];
+        let a = self.texture.load_vec4(idx.x as usize);
+        let b = self.texture.load_vec4(idx.y as usize);
+        let c = self.texture.load_vec4(idx.z as usize);
+        let d = self.texture.load_vec4(idx.w as usize);
 
         Vec4::new(a.w, b.w, c.w, d.w)
     }
@@ -446,8 +460,7 @@ impl TextureCache {
             Arc::new(match self.load_texture(uri, texture_type) {
                 Ok(tex) => tex,
                 Err(e) => {
-                    eprintln!("Failed to load texture '{}': {}", uri, e);
-                    self.create_fallback_texture(texture_type)
+                    panic!("Failed to load texture '{}': {}", uri, e);
                 }
             })
         })
@@ -500,19 +513,11 @@ impl TextureCache {
                                 let src_y = start_y + y;
                                 let src_idx = (src_y * width + src_x) as usize * 4;
 
-                                let r = raw_data[src_idx] as f32 / 255.0;
-                                let g = raw_data[src_idx + 1] as f32 / 255.0;
-                                let b = raw_data[src_idx + 2] as f32 / 255.0;
-                                let a = raw_data[src_idx + 3] as f32 / 255.0;
-                                if texture_type == TextureType::SRGB
-                                    || texture_type == TextureType::Cubemap
-                                {
-                                    let srgb = Vec4::new(r, g, b, a);
-                                    let linear = srgb_to_linear(srgb);
-                                    data.push(linear);
-                                } else {
-                                    data.push(Vec4::new(r, g, b, a));
-                                }
+                                let r = raw_data[src_idx];
+                                let g = raw_data[src_idx + 1];
+                                let b = raw_data[src_idx + 2];
+                                let a = raw_data[src_idx + 3];
+                                data.push(rgba8_pack_u8(r, g, b, a));
                             }
                         }
                     }
@@ -541,21 +546,11 @@ impl TextureCache {
                     // 2D texture
                     let mut data = Vec::with_capacity((width * height) as usize);
                     for chunk in raw_data.chunks_exact(4) {
-                        let r = chunk[0] as f32 / 255.0;
-                        let g = chunk[1] as f32 / 255.0;
-                        let b = chunk[2] as f32 / 255.0;
-                        let a = chunk[3] as f32 / 255.0;
-                        match texture_type {
-                            TextureType::SRGB | TextureType::Cubemap => {
-                                data.push(Vec4::new(r * r, g * g, b * b, a));
-                            }
-                            TextureType::Normal => {
-                                data.push(Vec4::new(r, g, b, a) * 2.0 - 1.0);
-                            }
-                            _ => {
-                                data.push(Vec4::new(r, g, b, a));
-                            }
-                        }
+                        let r = chunk[0];
+                        let g = chunk[1];
+                        let b = chunk[2];
+                        let a = chunk[3];
+                        data.push(rgba8_pack_u8(r, g, b, a));
                     }
                     Ok(Texture {
                         width,
@@ -592,41 +587,6 @@ impl TextureCache {
         texture
     }
 
-    fn create_fallback_texture(&self, texture_type: TextureType) -> Texture {
-        // Create a simple checkerboard pattern as fallback
-        let width = 64;
-        let height = 64;
-        let mut data = Vec::with_capacity((width * height) as usize);
-
-        for y in 0..height {
-            for x in 0..width {
-                let is_checker = ((x / 8) + (y / 8)) % 2 == 0;
-                let color = if is_checker { 1.0 } else { 0.5 };
-                data.push(Vec4::new(color, color, color, 1.0));
-            }
-        }
-
-        Texture {
-            width,
-            height,
-            width_height_vec: Vec4::new(width as f32, width as f32, height as f32, height as f32),
-            data,
-            texture_type,
-            max_mip_level: 0,
-            max_mip_level_vec: Vec4::ZERO,
-            mip_offsets: vec![0],
-            mip_widths: vec![width],
-            mip_heights: vec![height],
-            mip_widths_f: vec![width as f32],
-            mip_heights_f: vec![height as f32],
-            array_stride: vec![if texture_type == TextureType::Cubemap {
-                width * height
-            } else {
-                0
-            }],
-        }
-    }
-
     pub fn unique_texture_count(&self) -> usize {
         self.textures.len()
     }
@@ -634,7 +594,7 @@ impl TextureCache {
     pub fn total_texture_data_size(&self) -> usize {
         self.textures
             .iter()
-            .map(|item| item.value().get().unwrap().data.len() * std::mem::size_of::<Vec4>())
+            .map(|item| item.value().get().unwrap().data.len() * std::mem::size_of::<u32>())
             .sum()
     }
 }

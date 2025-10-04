@@ -123,7 +123,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     // Apply normal mapping if we have a normal map
     let mut normal_world = input_normal;
     if let Some(normal_map) = &material.normal_texture {
-        let tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv);
+        let tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv) * 2.0 - 1.0;
         let binormal = input_normal.cross(input_tangent);
         normal_world = input_tangent * tangent_space_normal.x
             + binormal * tangent_space_normal.y
@@ -172,7 +172,7 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // If we have a base texture, sample it
     if let Some(diffuse_texture) = &material.base_color_texture {
-        base_color_diffuse *= diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        base_color_diffuse *= srgb_to_linear_fast(diffuse_texture.sample4_rgb(uv_x, uv_y, du_dv));
     }
 
     let mut roughness = Vec4::splat(material.roughness_factor);
@@ -260,16 +260,18 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
 
     // Sample and add emissive texture if provided
     if let Some(emissive_texture) = &material.emissive_texture {
-        let emissive_mat = emissive_texture.sample4_rgb(uv_x, uv_y, du_dv);
+        let emissive_mat = srgb_to_linear_fast(emissive_texture.sample4_rgb(uv_x, uv_y, du_dv));
         color += emissive_mat * material.emissive_factor;
     }
 
     // Sample global cubemap for reflections
     let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
     let reflect = view_normal.reflect(normal_world);
-    let cubemap_color = scene
-        .cubemap
-        .sample_cubemap_rgb(reflect * -1.0, cube_mip_level);
+    let cubemap_color = srgb_to_linear_fast(
+        scene
+            .cubemap
+            .sample_cubemap_rgb(reflect * -1.0, cube_mip_level),
+    );
     let dielectric_hack = metallic * 0.8 + 0.2; // Temporary hack until proper env maps are implemented
     color += cubemap_color * brdf_f * dielectric_hack;
 

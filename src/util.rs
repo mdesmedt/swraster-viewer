@@ -55,6 +55,46 @@ pub fn srgb_to_linear(color: Vec4) -> Vec4 {
     )
 }
 
+pub fn linear_to_srgb_scalar(scalar: f32) -> f32 {
+    if scalar <= 0.0031308 {
+        scalar * 12.92
+    } else {
+        f32::powf(scalar, 1.0 / 2.4) * 1.055 - 0.055
+    }
+}
+
+pub fn linear_to_srgb_vec4(color: Vec4) -> Vec4 {
+    Vec4::new(
+        linear_to_srgb_scalar(color.x),
+        linear_to_srgb_scalar(color.y),
+        linear_to_srgb_scalar(color.z),
+        color.w,
+    )
+}
+
+pub fn rgba8_unpack_vec4(rgba8: u32) -> Vec4 {
+    let r = ((rgba8 >> 24) & 0xFF) as f32 / 255.0;
+    let g = ((rgba8 >> 16) & 0xFF) as f32 / 255.0;
+    let b = ((rgba8 >> 8) & 0xFF) as f32 / 255.0;
+    let a = ((rgba8 >> 0) & 0xFF) as f32 / 255.0;
+    Vec4::new(r, g, b, a)
+}
+
+pub fn rgba8_pack_vec4(color: Vec4) -> u32 {
+    (((color.x * 255.0) as u32) << 24)
+        | (((color.y * 255.0) as u32) << 16)
+        | (((color.z * 255.0) as u32) << 8)
+        | (((color.w * 255.0) as u32) << 0)
+}
+
+pub fn rgba8_pack_u8(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32)
+}
+
+pub fn srgb_to_linear_fast(x: Vec3x4) -> Vec3x4 {
+    return x * (x * (x * 0.305306011 + 0.682171111) + 0.012522878);
+}
+
 // Gather functions for Vec<f32> and Vec<u32>
 
 pub trait GatherU32 {
