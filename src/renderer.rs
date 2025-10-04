@@ -626,6 +626,19 @@ impl Renderer {
             return;
         }
 
+        // Compute triangle bounding box (inclusive bounds)
+        let screen_min_subpixels: IVec2 = IVec2::new(
+            p0.x.min(p1.x).min(p2.x).max(0),
+            p0.y.min(p1.y).min(p2.y).max(0),
+        );
+        let screen_max_subpixels: IVec2 = IVec2::new(
+            p0.x.max(p1.x).max(p2.x).min(self.width_subpixels),
+            p0.y.max(p1.y).max(p2.y).min(self.height_subpixels),
+        );
+        // Convert to pixels (exclusive bounds)
+        let screen_min_pixels = screen_min_subpixels >> SUBPIXEL_SHIFT;
+        let screen_max_pixels = (screen_max_subpixels + SUBPIXEL_SCALE) >> SUBPIXEL_SHIFT;
+
         // Set up the values which the rasterizer will need
 
         let one_over_area = 1.0 / (signed_area.abs() as f32);
@@ -680,18 +693,6 @@ impl Renderer {
         let du_dv =
             Vec4::new(du_dx, du_dy, dv_dx, dv_dy) * Vec4::splat(one_over_area * SUBPIXEL_SCALE_F);
 
-        // Compute triangle bounding box
-        let screen_min_subpixels: IVec2 = IVec2::new(
-            p0.x.min(p1.x).min(p2.x).max(0),
-            p0.y.min(p1.y).min(p2.y).max(0),
-        );
-        let screen_max_subpixels: IVec2 = IVec2::new(
-            p0.x.max(p1.x).max(p2.x).min(self.width_subpixels),
-            p0.y.max(p1.y).max(p2.y).min(self.height_subpixels),
-        );
-        let screen_min_pixels = screen_min_subpixels >> SUBPIXEL_SHIFT;
-        let screen_max_pixels = (screen_max_subpixels + SUBPIXEL_SCALE - 1) >> SUBPIXEL_SHIFT;
-
         // Calculate which bins intersect with the triangle's bounding box
         let min_bin_x = screen_min_pixels.x / TILE_SIZE;
         let min_bin_y = screen_min_pixels.y / TILE_SIZE;
@@ -699,9 +700,9 @@ impl Renderer {
         let max_bin_y = (screen_max_pixels.y + TILE_SIZE - 1) / TILE_SIZE;
 
         // Calculate number of bins in x direction
-        let bins_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
+        let tile_width_bins = (self.width + TILE_SIZE - 1) / TILE_SIZE;
 
-        // Compute average z for translucency sorting later
+        // Compute average z for per-tile translucency sorting later
         let avg_z = if !MODE_OPAQUE {
             OrderedFloat(
                 (triangle.vertices[0].pos_clip.z
@@ -716,19 +717,20 @@ impl Renderer {
         // Send the packet to all intersecting bins
         for y in min_bin_y..max_bin_y {
             for x in min_bin_x..max_bin_x {
-                let bin_index = y * bins_x + x;
+                let bin_index = y * tile_width_bins + x;
                 if bin_index >= 0 && bin_index < self.tiles.len() as i32 {
                     let tile = &self.tiles[bin_index as usize];
 
                     // Clip the triangle bounds to this tile's bounds
-                    let tile_clipped_min = IVec2::new(
-                        screen_min_pixels.x.max(tile.screen_min.x),
-                        screen_min_pixels.y.max(tile.screen_min.y),
-                    );
-                    let tile_clipped_max = IVec2::new(
-                        screen_max_pixels.x.min(tile.screen_max.x),
-                        screen_max_pixels.y.min(tile.screen_max.y),
-                    );
+                    let tile_clipped_min = screen_min_pixels.max(tile.screen_min);
+                    let tile_clipped_max = screen_max_pixels.min(tile.screen_max);
+
+                    let width = tile_clipped_max.x - tile_clipped_min.x;
+                    let height = tile_clipped_max.y - tile_clipped_min.y;
+                    if width < 1 || height < 1 {
+                        // Zero-area triangle in the bin
+                        continue;
+                    }
 
                     // Create a RasterPacket clipped to the tile
                     let packet = RasterPacket {
