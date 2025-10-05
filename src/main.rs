@@ -343,7 +343,11 @@ impl App {
         let gltf_path = gltf_path.to_path_buf(); // Clone the path for the thread
         let settings_clone = settings.clone();
         thread::spawn(move || {
-            load_scene(&gltf_path, &loading_state_clone, &settings_clone);
+            // Create a temporary thread pool for the loading thread
+            let thread_pool = rayon::ThreadPoolBuilder::new().build().unwrap();
+            thread_pool.scope(|_| {
+                load_scene(&gltf_path, &loading_state_clone, &settings_clone);
+            });
         });
 
         // FPS measurement variables
