@@ -498,7 +498,7 @@ impl TileRasterizer {
 
         // Transform by the transposed inverse view-projection matrix
         let world_dir = Vec3x4::transform_direction_transposed(
-            camera.inverse_view_project_matrix_transposed,
+            camera.skybox_matrix_transposed,
             clip_pos,
         );
         let world_normal = world_dir.normalize();

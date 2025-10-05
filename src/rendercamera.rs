@@ -19,13 +19,13 @@ pub struct RenderCamera {
     pub projection_matrix: Mat4,
     pub view_project_matrix: Mat4,
     pub inverse_view_project_matrix: Mat4,
-    pub inverse_view_project_matrix_transposed: Mat4,
+    pub skybox_matrix_transposed: Mat4,
     pub view_clip_planes: [Vec4; 6],
     pub view_normal: Vec3A,
 }
 
 impl RenderCamera {
-    pub fn new(position: Vec3A, look_at: Vec3A, fov: f32, width: f32, height: f32) -> Self {
+    pub fn new(position: Vec3A, look_at: Vec3A, fov: f32, width: f32, height: f32, far_plane: f32) -> Self {
         // Calculate the forward direction (from position to look_at)
         let forward = (look_at - position).normalize();
 
@@ -40,8 +40,8 @@ impl RenderCamera {
             height,
             one_over_width: 1.0 / width,
             one_over_height: 1.0 / height,
-            near: 0.01,
-            far: 200.0,
+            near: far_plane * 0.01,
+            far: far_plane,
             yaw,
             pitch,
             roll: 0.0,
@@ -49,7 +49,7 @@ impl RenderCamera {
             projection_matrix: Mat4::IDENTITY,
             view_project_matrix: Mat4::IDENTITY,
             inverse_view_project_matrix: Mat4::IDENTITY,
-            inverse_view_project_matrix_transposed: Mat4::IDENTITY,
+            skybox_matrix_transposed: Mat4::IDENTITY,
             view_clip_planes: [Vec4::ZERO; 6],
             view_normal: Vec3A::ZERO,
         }
@@ -62,7 +62,7 @@ impl RenderCamera {
                 let position = Vec3A::new(0.0, 0.0, 5.0); // Default position, should be set by node transform
                 let look_at = Vec3A::new(0.0, 0.0, 0.0); // Default look at, should be set by node transform
 
-                Some(Self::new(position, look_at, fov, width, height))
+                Some(Self::new(position, look_at, fov, width, height, 1000.0))
             }
             Projection::Orthographic(_) => None, // We don't support orthographic cameras yet
         }
@@ -73,7 +73,7 @@ impl RenderCamera {
         self.projection_matrix = self.compute_projection_matrix();
         self.view_project_matrix = self.projection_matrix * self.view_matrix;
         self.inverse_view_project_matrix = self.view_project_matrix.inverse();
-        self.inverse_view_project_matrix_transposed = self.inverse_view_project_matrix.transpose();
+        self.skybox_matrix_transposed = self.compute_skybox_matrix_transposed();
         self.view_clip_planes = self.compute_view_clip_planes();
         self.view_normal = self.get_rotation().conjugate() * Vec3A::new(0.0, 0.0, 1.0);
     }
@@ -90,6 +90,13 @@ impl RenderCamera {
 
     fn compute_projection_matrix(&self) -> Mat4 {
         Mat4::perspective_rh(self.fov, self.width / self.height, self.near, self.far)
+    }
+
+    fn compute_skybox_matrix_transposed(&self) -> Mat4 {
+        let rotation_matrix: Mat4 = Mat4::from_quat(self.get_rotation());
+        let projection_matrix = self.compute_projection_matrix();
+        let viewproj = projection_matrix * rotation_matrix;
+        return viewproj.inverse().transpose();
     }
 
     pub fn move_relative(&mut self, direction: Vec3A, magnitude: f32) {

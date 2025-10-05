@@ -206,13 +206,16 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
         // Position camera at a distance proportional to scene size
         let camera_distance = scene.bounds.diagonal;
         let camera_pos = scene.bounds.center + Vec3A::new(0.0, 0.0, camera_distance);
+        let camera_target = scene.bounds.center;
+        let far_plane = scene.bounds.diagonal * 2.0;
 
         RenderCamera::new(
             Vec3A::from(camera_pos),
-            Vec3A::from(scene.bounds.center),
+            Vec3A::from(camera_target),
             std::f32::consts::PI / 4.0,
             WIDTH as f32,
             HEIGHT as f32,
+            far_plane,
         )
     };
 
