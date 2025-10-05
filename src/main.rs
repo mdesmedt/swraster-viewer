@@ -311,7 +311,6 @@ struct App {
     last_fps_update: Instant,
     last_frame_time: Instant,
     input_state: InputState,
-    #[allow(dead_code)] // TODO: Use vsync setting again
     settings: Settings,
 }
 
@@ -573,7 +572,7 @@ impl App {
                 let pixels = self.pixels.as_mut().unwrap();
                 let buffer = pixels.frame_mut();
                 buffer
-                    .par_chunks_exact_mut(4)
+                    .chunks_exact_mut(4)
                     .enumerate()
                     .for_each(|(i, pixel)| {
                         let (r, g, b, a) = rgba8_unpack_u8(prev_backbuffer[i]);
@@ -625,6 +624,10 @@ impl ApplicationHandler for App {
 
         // Set scaling mode
         pixels.set_scaling_mode(pixels::ScalingMode::Fill);
+
+        if self.settings.no_vsync {
+            pixels.enable_vsync(false);
+        }
 
         self.window = Some(window);
         self.pixels = Some(pixels);
