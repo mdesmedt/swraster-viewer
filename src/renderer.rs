@@ -16,7 +16,7 @@ const TILE_SIZE: i32 = 64;
 pub struct RenderBuffer<'a> {
     pub width: usize,
     pub height: usize,
-    pub pixels: &'a mut [u8],
+    pub pixels: &'a mut [u32],
 }
 
 #[derive(Copy, Clone)]
@@ -67,7 +67,7 @@ pub struct RasterPacket {
 }
 
 impl<'a> RenderBuffer<'a> {
-    pub fn new(width: usize, height: usize, pixels: &'a mut [u8]) -> Self {
+    pub fn new(width: usize, height: usize, pixels: &'a mut [u32]) -> Self {
         Self {
             width,
             height,
@@ -76,19 +76,12 @@ impl<'a> RenderBuffer<'a> {
     }
 
     pub fn clear(&mut self) {
-        for pixel in self.pixels.chunks_exact_mut(4) {
-            pixel[0] = 0x00; // R
-            pixel[1] = 0x00; // G
-            pixel[2] = 0x00; // B
-
-            // Assume A is never written to
-            //pixel[3] = 0xff; // A
-        }
+        self.pixels.fill(0);
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, channel: usize, color: u8) {
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
         if x < self.width && y < self.height {
-            self.pixels[(y * self.width + x) * 4 + channel] = color;
+            self.pixels[y * self.width + x] = color;
         }
     }
 }
@@ -249,7 +242,7 @@ impl Renderer {
     // Copy all tiles pixels to the backbuffer
     pub fn blit_to_buffer(&self, buffer: &mut RenderBuffer) {
         let num_tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
-        let chunk_size = buffer.width * 4 * 2; // 2 rows of quads
+        let chunk_size = buffer.width * 2; // 2 rows of quads
         buffer
             .pixels
             .par_chunks_exact_mut(chunk_size)
@@ -301,11 +294,8 @@ impl Renderer {
                                     let b: u8 = (pixel.z * 255.0) as u8;
 
                                     // Write the components to the backbuffer
-                                    let dst_offset = (pixel_x + sub_y * self.width) as usize * 4;
-                                    buffer_rows[dst_offset] = r;
-                                    buffer_rows[dst_offset + 1] = g;
-                                    buffer_rows[dst_offset + 2] = b;
-                                    buffer_rows[dst_offset + 3] = 0xFF;
+                                    let dst_offset = (pixel_x + sub_y * self.width) as usize;
+                                    buffer_rows[dst_offset] = rgba8_pack_u8(r, g, b, 0xFF);
                                 }
                             }
                         }

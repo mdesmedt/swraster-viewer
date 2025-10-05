@@ -38,6 +38,7 @@ use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
 use scene::Scene;
 use texture::TextureCache;
+use util::*;
 use voxelgrid::VoxelGrid;
 
 const WIDTH: usize = 1280;
@@ -303,11 +304,14 @@ struct App {
     loading_state: Arc<Mutex<LoadingState>>,
     filename: String,
     start_time: Instant,
-    renderer: Renderer,
+    renderer: Mutex<Renderer>,
+    backbuffers: [Mutex<Vec<u32>>; 2],
+    backbuffer_index: usize,
     frame_count: u32,
     last_fps_update: Instant,
     last_frame_time: Instant,
     input_state: InputState,
+    #[allow(dead_code)] // TODO: Use vsync setting again
     settings: Settings,
 }
 
@@ -357,7 +361,12 @@ impl App {
         Self {
             window: None,
             pixels: None,
-            renderer,
+            renderer: Mutex::new(renderer),
+            backbuffers: [
+                Mutex::new(vec![0; WIDTH * HEIGHT]),
+                Mutex::new(vec![0; WIDTH * HEIGHT]),
+            ],
+            backbuffer_index: 0,
             loading_state,
             filename: filename.to_string(),
             start_time,
@@ -420,145 +429,165 @@ impl App {
             return;
         }
 
-        // Try to get the render state
-        let mut loading_state_guard = self.loading_state.lock().unwrap();
-        let mut loading_complete = false;
-
-        match &mut *loading_state_guard {
-            LoadingState::Loaded(render_state) => {
-                if !loading_complete {
-                    // First frame after loading
-                    if self.settings.no_vsync {
-                        self.pixels.as_mut().unwrap().enable_vsync(false);
-                    }
-                    loading_complete = true;
-                }
-
-                // Scene is loaded, handle input and render
-                let camera = &mut render_state.camera;
-
-                // Handle keyboard input for camera movement
-                let mut move_dir = Vec3A::ZERO;
-
-                if self.input_state.is_key_down(KeyCode::KeyW) {
-                    move_dir.z -= 1.0; // Forward (negative Z in camera space)
-                }
-                if self.input_state.is_key_down(KeyCode::KeyS) {
-                    move_dir.z += 1.0; // Backward (positive Z in camera space)
-                }
-                if self.input_state.is_key_down(KeyCode::KeyA) {
-                    move_dir.x -= 1.0; // Left (negative X in camera space)
-                }
-                if self.input_state.is_key_down(KeyCode::KeyD) {
-                    move_dir.x += 1.0; // Right (positive X in camera space)
-                }
-                if self.input_state.is_key_down(KeyCode::KeyE) {
-                    move_dir.y += 1.0; // Up (positive Y in camera space)
-                }
-                if self.input_state.is_key_down(KeyCode::KeyQ) {
-                    move_dir.y -= 1.0; // Down (negative Y in camera space)
-                }
-
-                // Handle camera rotation using the arrow keys
-                let key_rotation_speed = if self.input_state.is_key_down(KeyCode::ShiftLeft)
-                    || self.input_state.is_key_down(KeyCode::ShiftRight)
-                {
-                    KEY_ROTATION_SPEED_FAST * delta_time
-                } else {
-                    KEY_ROTATION_SPEED * delta_time
-                };
-                if self.input_state.is_key_down(KeyCode::ArrowLeft) {
-                    camera.rotate_mouse(Vec2::new(-key_rotation_speed, 0.0));
-                }
-                if self.input_state.is_key_down(KeyCode::ArrowRight) {
-                    camera.rotate_mouse(Vec2::new(key_rotation_speed, 0.0));
-                }
-                if self.input_state.is_key_down(KeyCode::ArrowUp) {
-                    camera.rotate_mouse(Vec2::new(0.0, -key_rotation_speed));
-                }
-                if self.input_state.is_key_down(KeyCode::ArrowDown) {
-                    camera.rotate_mouse(Vec2::new(0.0, key_rotation_speed));
-                }
-
-                let scene_size = render_state.scene.bounds.diagonal;
-
-                // Normalize movement direction if moving diagonally
-                if move_dir.length_squared() > 0.0 {
-                    move_dir = move_dir.normalize();
-                    // Use faster speed when shift is pressed
-                    let speed = if self.input_state.is_key_down(KeyCode::ShiftLeft)
-                        || self.input_state.is_key_down(KeyCode::ShiftRight)
-                    {
-                        CAMERA_SPEED_FAST * scene_size
-                    } else {
-                        CAMERA_SPEED * scene_size
-                    };
-                    camera.move_relative(move_dir, speed * delta_time);
-                }
-
-                // Handle mouse input for camera rotation
-                if self.input_state.mouse_down {
-                    const ROTATION_FACTOR: Vec2 = Vec2::new(0.4, 0.3);
-                    let delta = self.input_state.mouse_delta;
-                    camera.rotate_mouse(delta * ROTATION_FACTOR);
-                    self.input_state.mouse_delta = Vec2::ZERO;
-                }
-
-                // Update camera matrices
-                camera.update_matrices();
-
-                // Render the scene
-                self.renderer.render_scene(&render_state.scene, camera);
-            }
-            LoadingState::Loading => {
-                // Do nothing
-            }
-            LoadingState::Error(error_msg) => {
-                // Scene failed to load, exit
-                eprintln!("Scene loading failed: {}", error_msg);
-                event_loop.exit();
-                return;
-            }
-        }
-
-        // Grab the buffer from pixels
-        let pixels = self.pixels.as_mut().unwrap();
-        let buffer = pixels.frame_mut();
-        let mut render_buffer = RenderBuffer::new(WIDTH, HEIGHT, buffer);
-
-        if loading_complete {
-            // Blit the rendered tiles to the buffer
-            self.renderer.blit_to_buffer(&mut render_buffer);
-        } else {
-            // Still loading, draw quaint little loading indicator
-            render_buffer.clear();
-            let center_x = WIDTH as i32 / 2;
-            let center_y = HEIGHT as i32 / 2;
-            let radius = 50;
-            let time = current_time.duration_since(self.start_time).as_secs_f64();
-            let angle = time * 2.0 * std::f64::consts::PI; // One rotation per second
-            const NUM_POINTS: usize = 32;
-            const ANGLE_STEP: f64 = (std::f64::consts::PI * 0.5) / NUM_POINTS as f64;
-            for i in 0..NUM_POINTS {
-                let point_angle = (i as f64 * ANGLE_STEP) + angle;
-                let x = center_x as i32 + (point_angle.cos() * radius as f64) as i32;
-                let y = center_y as i32 + (point_angle.sin() * radius as f64) as i32;
-                let px = x as usize;
-                let py = y as usize;
-                let intensity = i as f64 / NUM_POINTS as f64;
-                let intensity_int = (intensity * 255.0) as u8;
-                render_buffer.set_pixel(px, py, 0, intensity_int);
-                render_buffer.set_pixel(px, py, 1, intensity_int);
-                render_buffer.set_pixel(px, py, 2, intensity_int);
-                render_buffer.set_pixel(px, py, 3, 0xFF);
-            }
-        }
-
-        if let Err(err) = pixels.render() {
-            eprintln!("Pixels render error: {}", err);
+        // Check if loading failed
+        if let LoadingState::Error(error_msg) = &mut *self.loading_state.lock().unwrap() {
+            eprintln!("Scene loading failed: {}", error_msg);
             event_loop.exit();
             return;
         }
+
+        // If loaded, process input
+        if let LoadingState::Loaded(render_state) = &mut *self.loading_state.lock().unwrap() {
+            let camera = &mut render_state.camera;
+
+            // Handle keyboard input for camera movement
+            let mut move_dir = Vec3A::ZERO;
+
+            if self.input_state.is_key_down(KeyCode::KeyW) {
+                move_dir.z -= 1.0; // Forward (negative Z in camera space)
+            }
+            if self.input_state.is_key_down(KeyCode::KeyS) {
+                move_dir.z += 1.0; // Backward (positive Z in camera space)
+            }
+            if self.input_state.is_key_down(KeyCode::KeyA) {
+                move_dir.x -= 1.0; // Left (negative X in camera space)
+            }
+            if self.input_state.is_key_down(KeyCode::KeyD) {
+                move_dir.x += 1.0; // Right (positive X in camera space)
+            }
+            if self.input_state.is_key_down(KeyCode::KeyE) {
+                move_dir.y += 1.0; // Up (positive Y in camera space)
+            }
+            if self.input_state.is_key_down(KeyCode::KeyQ) {
+                move_dir.y -= 1.0; // Down (negative Y in camera space)
+            }
+
+            // Handle camera rotation using the arrow keys
+            let key_rotation_speed = if self.input_state.is_key_down(KeyCode::ShiftLeft)
+                || self.input_state.is_key_down(KeyCode::ShiftRight)
+            {
+                KEY_ROTATION_SPEED_FAST * delta_time
+            } else {
+                KEY_ROTATION_SPEED * delta_time
+            };
+            if self.input_state.is_key_down(KeyCode::ArrowLeft) {
+                camera.rotate_mouse(Vec2::new(-key_rotation_speed, 0.0));
+            }
+            if self.input_state.is_key_down(KeyCode::ArrowRight) {
+                camera.rotate_mouse(Vec2::new(key_rotation_speed, 0.0));
+            }
+            if self.input_state.is_key_down(KeyCode::ArrowUp) {
+                camera.rotate_mouse(Vec2::new(0.0, -key_rotation_speed));
+            }
+            if self.input_state.is_key_down(KeyCode::ArrowDown) {
+                camera.rotate_mouse(Vec2::new(0.0, key_rotation_speed));
+            }
+
+            let scene_size = render_state.scene.bounds.diagonal;
+
+            // Normalize movement direction if moving diagonally
+            if move_dir.length_squared() > 0.0 {
+                move_dir = move_dir.normalize();
+                // Use faster speed when shift is pressed
+                let speed = if self.input_state.is_key_down(KeyCode::ShiftLeft)
+                    || self.input_state.is_key_down(KeyCode::ShiftRight)
+                {
+                    CAMERA_SPEED_FAST * scene_size
+                } else {
+                    CAMERA_SPEED * scene_size
+                };
+                camera.move_relative(move_dir, speed * delta_time);
+            }
+
+            // Handle mouse input for camera rotation
+            if self.input_state.mouse_down {
+                const ROTATION_FACTOR: Vec2 = Vec2::new(0.4, 0.3);
+                let delta = self.input_state.mouse_delta;
+                camera.rotate_mouse(delta * ROTATION_FACTOR);
+                self.input_state.mouse_delta = Vec2::ZERO;
+            }
+
+            // Update camera matrices
+            camera.update_matrices();
+        }
+
+        let backbuffer_index = self.backbuffer_index;
+        let prev_backbuffer_index = 1 - backbuffer_index;
+
+        // Render the frame while presenting the previous backbuffer
+        rayon::scope(|s| {
+            s.spawn(|_| {
+                // Render the current frame
+                let mut backbuffer_guard = self.backbuffers[backbuffer_index].lock().unwrap();
+                let backbuffer = &mut *backbuffer_guard;
+                let mut render_buffer = RenderBuffer::new(WIDTH, HEIGHT, backbuffer);
+
+                match &mut *self.loading_state.lock().unwrap() {
+                    LoadingState::Loaded(render_state) => {
+                        let camera = &mut render_state.camera;
+                        let mut renderer_guard = self.renderer.lock().unwrap();
+                        let renderer = &mut *renderer_guard;
+                        // Render the scene
+                        renderer.render_scene(&render_state.scene, camera);
+                        // Blit tiles to the current backbuffer
+                        renderer.blit_to_buffer(&mut render_buffer);
+                    }
+                    LoadingState::Loading => {
+                        // Still loading, draw quaint little loading indicator
+                        render_buffer.clear();
+                        let center_x = WIDTH as i32 / 2;
+                        let center_y = HEIGHT as i32 / 2;
+                        let radius = 50;
+                        let time = current_time.duration_since(self.start_time).as_secs_f64();
+                        let angle = time * 2.0 * std::f64::consts::PI; // One rotation per second
+                        const NUM_POINTS: usize = 32;
+                        const ANGLE_STEP: f64 = (std::f64::consts::PI * 0.5) / NUM_POINTS as f64;
+                        for i in 0..NUM_POINTS {
+                            let point_angle = (i as f64 * ANGLE_STEP) + angle;
+                            let x = center_x as i32 + (point_angle.cos() * radius as f64) as i32;
+                            let y = center_y as i32 + (point_angle.sin() * radius as f64) as i32;
+                            let px = x as usize;
+                            let py = y as usize;
+                            let intensity = i as f64 / NUM_POINTS as f64;
+                            let intensity_int = (intensity * 255.0) as u8;
+                            let color =
+                                rgba8_pack_u8(intensity_int, intensity_int, intensity_int, 0xFF);
+                            render_buffer.set_pixel(px, py, color);
+                        }
+                    }
+                    LoadingState::Error(_) => {
+                        // Do nothing
+                    }
+                }
+            });
+
+            s.spawn(|_| {
+                // Copy the previous backbuffer to pixels
+                let mut prev_backbuffer_guard =
+                    self.backbuffers[prev_backbuffer_index].lock().unwrap();
+                let prev_backbuffer = &mut *prev_backbuffer_guard;
+                let pixels = self.pixels.as_mut().unwrap();
+                let buffer = pixels.frame_mut();
+                buffer
+                    .par_chunks_exact_mut(4)
+                    .enumerate()
+                    .for_each(|(i, pixel)| {
+                        let (r, g, b, a) = rgba8_unpack_u8(prev_backbuffer[i]);
+                        pixel[0] = r;
+                        pixel[1] = g;
+                        pixel[2] = b;
+                        pixel[3] = a;
+                    });
+
+                if let Err(err) = pixels.render() {
+                    eprintln!("Pixels render error: {}", err);
+                    return;
+                }
+            });
+        });
+
+        // Swap backbuffers
+        self.backbuffer_index = 1 - self.backbuffer_index;
 
         // Update FPS counter
         self.frame_count += 1;
@@ -592,12 +621,6 @@ impl ApplicationHandler for App {
 
         // Set scaling mode
         pixels.set_scaling_mode(pixels::ScalingMode::Fill);
-
-        // Clear alpha to FF once, never touch it again
-        // TODO: Might be faster to just write alpha, possibly with uint64_t or so?
-        pixels.frame_mut().chunks_exact_mut(4).for_each(|pixel| {
-            pixel[3] = 0xff;
-        });
 
         self.window = Some(window);
         self.pixels = Some(pixels);
