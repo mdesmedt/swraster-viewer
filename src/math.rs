@@ -128,6 +128,10 @@ impl Vec3x4 {
         )
     }
 
+    pub fn max(&self, max: Vec4) -> Vec3x4 {
+        Vec3x4::new(self.x.max(max), self.y.max(max), self.z.max(max))
+    }
+
     pub fn transform_direction_transposed(mat_transposed: Mat4, v: Vec3x4) -> Vec3x4 {
         let row0 = mat_transposed.col(0);
         let row1 = mat_transposed.col(1);

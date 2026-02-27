@@ -1,9 +1,9 @@
 use crossbeam::queue::SegQueue;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BLOCK_SIZE: usize = 1024;
 

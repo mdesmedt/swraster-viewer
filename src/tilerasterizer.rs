@@ -131,11 +131,7 @@ impl TileRasterizer {
 
         // Helper function to apply top-left bias
         fn top_left_bias(a: i32, b: i32) -> i32 {
-            if a < 0 || (a == 0 && b > 0) {
-                0
-            } else {
-                -1
-            }
+            if a < 0 || (a == 0 && b > 0) { 0 } else { -1 }
         }
 
         // Edge v0->v1: (y1-y0)x + (x0-x1)y + (x1*y0 - x0*y1) = 0
@@ -497,10 +493,8 @@ impl TileRasterizer {
         let clip_pos = Vec3x4::new(ndc_x, ndc_y, Vec4::ONE);
 
         // Transform by the transposed inverse view-projection matrix
-        let world_dir = Vec3x4::transform_direction_transposed(
-            camera.skybox_matrix_transposed,
-            clip_pos,
-        );
+        let world_dir =
+            Vec3x4::transform_direction_transposed(camera.skybox_matrix_transposed, clip_pos);
         let world_normal = world_dir.normalize();
 
         // Sample the cubemap

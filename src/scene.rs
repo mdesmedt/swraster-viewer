@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::texture::*;
 
@@ -69,6 +70,9 @@ pub struct Scene {
     pub light: Light,
     pub voxel_grid: Option<crate::voxelgrid::VoxelGrid>,
     pub cubemap: TextureAndSampler,
+    pub cubemap_specular: TextureAndSampler,
+    pub irradiance_sh: [Vec3A; 9],
+    pub brdf_lut: TextureAndSampler,
 }
 
 pub struct Node {
@@ -89,7 +93,7 @@ pub struct Mesh {
 pub struct Primitive {
     pub positions: Vec<Vec4>,
     pub normals: Vec<Vec3A>,
-    pub tangents: Vec<Vec3A>,
+    pub tangents: Vec<Vec4>,
     pub texcoords: Vec<Vec2>,
     pub indices: Vec<u32>,
     pub material_index: usize,
@@ -107,6 +111,7 @@ pub struct Material {
     pub emissive_factor: Vec3A,
     pub emissive_texture: Option<TextureAndSampler>,
     pub occlusion_texture: Option<TextureAndSampler>,
+    pub occlusion_strength: f32,
     pub is_alpha_tested: bool,
     pub is_translucent: bool,
     pub transmission: f32,
@@ -146,14 +151,33 @@ impl Scene {
         let cubemap_texture =
             texture_cache_builtin.get_or_create("cubemap.jpg", TextureType::Cubemap);
         let cubemap_sampler = Sampler {
-            wrap_s: WrapMode::Repeat,
-            wrap_t: WrapMode::Repeat,
+            wrap_s: WrapMode::ClampToEdge,
+            wrap_t: WrapMode::ClampToEdge,
             _min_filter: Filter::Linear,
             _mag_filter: Filter::Linear,
         };
         let cubemap = TextureAndSampler {
-            texture: cubemap_texture,
+            texture: cubemap_texture.clone(),
             sampler: cubemap_sampler,
+        };
+        let cubemap_specular = TextureAndSampler {
+            texture: Arc::new(generate_prefiltered_specular_cubemap(&cubemap, 64)),
+            sampler: Sampler {
+                wrap_s: WrapMode::ClampToEdge,
+                wrap_t: WrapMode::ClampToEdge,
+                _min_filter: Filter::Linear,
+                _mag_filter: Filter::Linear,
+            },
+        };
+        let irradiance_sh = compute_irradiance_sh9(&cubemap);
+        let brdf_lut = TextureAndSampler {
+            texture: Arc::new(generate_brdf_lut(128)),
+            sampler: Sampler {
+                wrap_s: WrapMode::ClampToEdge,
+                wrap_t: WrapMode::ClampToEdge,
+                _min_filter: Filter::Linear,
+                _mag_filter: Filter::Linear,
+            },
         };
 
         let mut scene = Scene {
@@ -168,6 +192,9 @@ impl Scene {
             },
             voxel_grid: None,
             cubemap,
+            cubemap_specular,
+            irradiance_sh,
+            brdf_lut,
         };
 
         // Pre-allocate vectors with capacity hints
@@ -397,17 +424,14 @@ impl Primitive {
             compute_smooth_normals(&positions, &indices)
         };
 
-        let tangents: Vec<Vec3A> = if let Some(file_tangents) = reader.read_tangents() {
+        let tangents: Vec<Vec4> = if let Some(file_tangents) = reader.read_tangents() {
             file_tangents
-                .map(|t| Vec3A::new(t[0], t[1], t[2]))
+                .map(|t| Vec4::new(t[0], t[1], t[2], t[3]))
                 .collect()
         } else {
             // Just clone the normals as tangents, without normal mapping it doesn't matter anyway
             println!("Computing automatic vertex tangents");
             compute_tangents(&positions, &texcoords, &normals, &indices)
-                .iter()
-                .map(|t| Vec3A::new(t[0], t[1], t[2]))
-                .collect()
         };
 
         let bounding_sphere = compute_bounding_sphere(&positions);
@@ -683,6 +707,10 @@ impl Material {
                     TextureType::Linear,
                 )
             }),
+            occlusion_strength: material
+                .occlusion_texture()
+                .map(|t| t.strength())
+                .unwrap_or(1.0),
             is_alpha_tested,
             is_translucent,
             alpha_cutoff_vec: Vec4::splat(material.alpha_cutoff().unwrap_or(0.5)),

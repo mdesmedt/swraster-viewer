@@ -99,6 +99,31 @@ impl<'a> PbrShaderParams<'a> {
     }
 }
 
+fn eval_irradiance_sh(coeffs: &[glam::Vec3A; 9], normal: Vec3x4) -> Vec3x4 {
+    let x = normal.x;
+    let y = normal.y;
+    let z = normal.z;
+
+    let basis = [
+        Vec4::splat(0.282095),
+        y * Vec4::splat(0.488603),
+        z * Vec4::splat(0.488603),
+        x * Vec4::splat(0.488603),
+        x * y * Vec4::splat(1.092548),
+        y * z * Vec4::splat(1.092548),
+        (z * z * 3.0 - Vec4::ONE) * Vec4::splat(0.315392),
+        x * z * Vec4::splat(1.092548),
+        (x * x - y * y) * Vec4::splat(0.546274),
+    ];
+
+    let mut irradiance = Vec3x4::ZERO;
+    for i in 0..9 {
+        let c = coeffs[i];
+        irradiance += Vec3x4::from_vec3a(c) * basis[i];
+    }
+    irradiance
+}
+
 pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> Vec3x4 {
     const EPS: Vec4 = Vec4::splat(1e-6);
     const PI: Vec4 = Vec4::splat(std::f32::consts::PI);
@@ -115,18 +140,22 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let w = 1.0 / packet.one_over_w.interpolate(bary1, bary2);
     let input_normal = packet.normals.interpolate(bary1, bary2).normalize();
     let input_tangent = packet.tangents.interpolate(bary1, bary2).normalize();
+    let tangent_sign = packet.tangent_sign.interpolate(bary1, bary2);
     let pos_world = packet.pos_world_over_w.interpolate(bary1, bary2) * w;
     let uv_x = packet.u_over_w.interpolate(bary1, bary2) * w;
     let uv_y = packet.v_over_w.interpolate(bary1, bary2) * w;
     let du_dv = packet.du_dv * w;
 
-    // Apply normal mapping if we have a normal map
-    let mut normal_world = input_normal;
+    // Re-orthonormalize TBN and apply normal map when available
+    let tangent_world =
+        (input_tangent - input_normal * input_normal.dot(input_tangent)).normalize();
+    let tangent_handedness = Vec4::select(tangent_sign.cmpge(Vec4::ZERO), Vec4::ONE, Vec4::NEG_ONE);
+    let bitangent_world = input_normal.cross(tangent_world) * tangent_handedness;
+    let mut normal_world = input_normal.normalize();
     if let Some(normal_map) = &material.normal_texture {
         let tangent_space_normal = normal_map.sample4_rgb(uv_x, uv_y, du_dv) * 2.0 - 1.0;
-        let binormal = input_normal.cross(input_tangent);
-        normal_world = input_tangent * tangent_space_normal.x
-            + binormal * tangent_space_normal.y
+        normal_world = tangent_world * tangent_space_normal.x
+            + bitangent_world * tangent_space_normal.y
             + input_normal * tangent_space_normal.z;
         normal_world = normal_world.normalize();
     }
@@ -144,17 +173,15 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         Vec4::splat(light.color.z),
     );
 
-    // Compute N.L diffuse lighting
-    let n_dot_l = normal_world.dot(light_dir).max(Vec4::ZERO);
-
     // Compute the view direction for each pixel
     let view_dir = Vec3x4::from_vec3a(camera.position) - pos_world;
-    let view_normal = view_dir.normalize();
+    let view_normal = view_dir.normalize(); // V
 
-    // Parameters for diffuse and specular lighting
+    // Parameters for direct BRDF
+    let n_dot_l = normal_world.dot(light_dir).max(Vec4::ZERO);
     let half_vector = (light_dir + view_normal).normalize();
     let n_dot_h = normal_world.dot(half_vector).max(Vec4::ZERO);
-    let n_dot_v = normal_world.dot(view_normal).max(Vec4::ZERO);
+    let n_dot_v = normal_world.dot(view_normal).max(Vec4::splat(1.0e-4));
     let v_dot_h = view_normal.dot(half_vector).max(Vec4::ZERO);
 
     // Get voxel grid lighting if available, for shadows
@@ -184,25 +211,33 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         roughness *= metallic_roughness_mat.y;
         metallic *= metallic_roughness_mat.z;
     }
+    roughness = roughness.clamp(Vec4::splat(0.045), Vec4::ONE);
+    metallic = metallic.clamp(Vec4::ZERO, Vec4::ONE);
+
+    let mut ao = Vec4::ONE;
+    if let Some(occlusion_texture) = &material.occlusion_texture {
+        ao = occlusion_texture.sample4_rgb(uv_x, uv_y, du_dv).x;
+        ao = Vec4::ONE + (ao - Vec4::ONE) * Vec4::splat(material.occlusion_strength);
+    }
 
     // Compute f0 for dielectrics (0.04) or base color for metals
     let f0 = Vec3x4::lerp(Vec3x4::splat(0.04), base_color_diffuse, metallic);
 
-    // Compute Schlick Fresnel
+    // Direct Schlick Fresnel
     let one_minus_vh = Vec4::ONE - v_dot_h;
     let one_minus_vh2 = one_minus_vh * one_minus_vh;
     let one_minus_vh4 = one_minus_vh2 * one_minus_vh2;
     let one_minus_vh5 = one_minus_vh4 * one_minus_vh; // (1 - V·H)^5
-    let brdf_f = f0 + (Vec3x4::ONE - f0) * one_minus_vh5;
+    let brdf_f_direct = f0 + (Vec3x4::ONE - f0) * one_minus_vh5;
 
-    // Compute GGX D
+    // GGX / Smith-Schlick terms
     let alpha = roughness * roughness;
     let alpha_2 = alpha * alpha;
     let ndh_2 = n_dot_h * n_dot_h;
     let denom_d = ndh_2 * (alpha_2 - Vec4::ONE) + Vec4::ONE;
     let brdf_d = alpha_2 / (PI * (denom_d * denom_d) + EPS);
 
-    // Compute Shlick-GGX G
+    // Schlick-GGX geometry
     let k = roughness + Vec4::ONE;
     let k = (k * k) * Vec4::splat(0.125); // (roughness+1)^2 / 8
     let gv_denom = n_dot_v * (Vec4::ONE - k) + k;
@@ -211,51 +246,73 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let gl = n_dot_l / (gl_denom + EPS);
     let brdf_g = gv * gl;
 
-    // Compute specular
+    // Direct lighting with explicit energy conservation
     let specular_dg = (brdf_d * brdf_g) / (Vec4::splat(4.0) * n_dot_l * n_dot_v + EPS);
-    let color_specular = brdf_f * specular_dg * n_dot_l * voxel_light_intensity;
+    let k_s_direct = brdf_f_direct;
+    let k_d_direct = (Vec3x4::ONE - k_s_direct) * (Vec4::ONE - metallic);
+    let lambert = base_color_diffuse * Vec4::splat(1.0 / std::f32::consts::PI);
+    let color_direct_diffuse = light_color * k_d_direct * lambert * n_dot_l * voxel_light_intensity;
+    let color_direct_specular =
+        light_color * brdf_f_direct * specular_dg * n_dot_l * voxel_light_intensity;
 
-    // TODO: Arbitrary diffuse ambient. Sample properly filtered cubemap instead
-    const AMBIENT_TOP: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.075);
-    const AMBIENT_BOTTOM: Vec3x4 = Vec3x4::from_f32(0.05, 0.05, 0.05);
-    let ambient_factor_top = normal_world.y.clamp(Vec4::ZERO, Vec4::ONE);
-    let ambient_factor_bottom = Vec4::ONE - ambient_factor_top;
-    let diffuse_ambient = AMBIENT_TOP * ambient_factor_top + AMBIENT_BOTTOM * ambient_factor_bottom;
+    // Indirect diffuse/specular IBL
+    let one_minus_nv = Vec4::ONE - n_dot_v;
+    let one_minus_nv2 = one_minus_nv * one_minus_nv;
+    let one_minus_nv4 = one_minus_nv2 * one_minus_nv2;
+    let one_minus_nv5 = one_minus_nv4 * one_minus_nv;
 
-    // Compute diffuse direct lighting color
-    let mut color_diffuse =
-        light_color * (Vec3x4::ONE - brdf_f) * (1.0 / PI) * n_dot_l * voxel_light_intensity;
+    let one_minus_roughness = Vec4::ONE - roughness;
+    let f_ibl_90 = f0.max(one_minus_roughness);
+    let k_s_ibl = f0 + (f_ibl_90 - f0) * one_minus_nv5;
+    let k_d_ibl = (Vec3x4::ONE - k_s_ibl) * (Vec4::ONE - metallic);
 
-    // Add diffuse ambient
-    color_diffuse += diffuse_ambient;
+    let irradiance = eval_irradiance_sh(&scene.irradiance_sh, normal_world);
+    let irradiance = irradiance.max(Vec4::ZERO);
+    let mut color_indirect_diffuse =
+        irradiance * base_color_diffuse * k_d_ibl * Vec4::splat(1.0 / std::f32::consts::PI);
 
-    // Multiply the above by the diffuse texture
-    color_diffuse *= base_color_diffuse;
+    // HACK: Darken ambient diffuse with shadow factor
+    color_indirect_diffuse *= voxel_light_intensity * Vec4::splat(0.75) + Vec4::splat(0.25);
 
-    // Finally multiply all diffuse lighting by 1-metallic
-    color_diffuse *= Vec4::ONE - metallic;
+    let reflect_dir = (view_normal * -1.0).reflect(normal_world);
+    let spec_mip = roughness * scene.cubemap_specular.texture.max_mip_level_vec;
+    let prefiltered_env = scene
+        .cubemap_specular
+        .sample_cubemap_trilinear_rgb(reflect_dir, spec_mip);
+    let brdf_lut = scene.brdf_lut.sample_bilinear_rgb(
+        n_dot_v.clamp(Vec4::ZERO, Vec4::ONE),
+        roughness.clamp(Vec4::ZERO, Vec4::ONE),
+        0,
+        UVec4::ZERO,
+    );
+    let mut brdf_spec_factor = f0 * brdf_lut.x;
+    brdf_spec_factor += brdf_lut.y;
+    let mut color_indirect_specular = prefiltered_env * brdf_spec_factor;
+
+    // AO only affects indirect lighting
+    color_indirect_diffuse *= ao;
+    let ao_spec = Vec4::ONE + (ao - Vec4::ONE) * Vec4::splat(0.5);
+    color_indirect_specular *= ao_spec;
 
     // Assemble lit color
     let mut color = if TRANSLUCENT {
-        // For translucent materials, blend in the current framebuffer color
         let mut transmission = Vec4::splat(material.transmission);
-
-        // Sample transmission texture if provided
         if let Some(transmission_texture) = &material.transmission_texture {
             let transmission_mat = transmission_texture.sample4_rgb(uv_x, uv_y, du_dv);
             transmission *= transmission_mat.x;
         }
+        transmission = transmission.clamp(Vec4::ZERO, Vec4::ONE);
 
-        // Multiply 1-transmission to diffuse lighting
         let inv_transmission = Vec4::ONE - transmission;
-        color_diffuse *= inv_transmission;
-
-        // Add the transmitted color multiplied by the transmission factor
         (shading_params.current_color * base_color_diffuse * transmission)
-            + (color_diffuse * inv_transmission)
-            + color_specular
+            + ((color_direct_diffuse + color_indirect_diffuse) * inv_transmission)
+            + color_direct_specular
+            + color_indirect_specular
     } else {
-        color_diffuse + color_specular
+        color_direct_diffuse
+            + color_direct_specular
+            + color_indirect_diffuse
+            + color_indirect_specular
     };
 
     // Sample and add emissive texture if provided
@@ -263,17 +320,6 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         let emissive_mat = srgb_to_linear_fast(emissive_texture.sample4_rgb(uv_x, uv_y, du_dv));
         color += emissive_mat * material.emissive_factor;
     }
-
-    // Sample global cubemap for reflections
-    let cube_mip_level = scene.cubemap.mip_level_from_scalar(roughness);
-    let reflect = view_normal.reflect(normal_world);
-    let cubemap_color = srgb_to_linear_fast(
-        scene
-            .cubemap
-            .sample_cubemap_rgb(reflect * -1.0, cube_mip_level),
-    );
-    let dielectric_hack = metallic * 0.8 + 0.2; // Temporary hack until proper env maps are implemented
-    color += cubemap_color * brdf_f * dielectric_hack;
 
     // Debug: Show world space position
     //color = pos_world;

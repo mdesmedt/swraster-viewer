@@ -24,7 +24,7 @@ pub struct Vertex {
     pub pos_clip: Vec4,
     pub pos_world: Vec3A,
     pub normal: Vec3A,
-    pub tangent: Vec3A,
+    pub tangent: Vec4,
     pub uv: Vec2,
 }
 
@@ -34,7 +34,7 @@ impl Vertex {
             pos_clip: Vec4::ZERO,
             pos_world: Vec3A::ZERO,
             normal: Vec3A::ZERO,
-            tangent: Vec3A::ZERO,
+            tangent: Vec4::ZERO,
             uv: Vec2::ZERO,
         }
     }
@@ -56,6 +56,7 @@ pub struct RasterPacket {
     pub one_over_w: ScalarInterpolator,
     pub normals: Vec3Interpolator,
     pub tangents: Vec3Interpolator,
+    pub tangent_sign: ScalarInterpolator,
     pub u_over_w: ScalarInterpolator,
     pub v_over_w: ScalarInterpolator,
     pub pos_world_over_w: Vec3Interpolator,
@@ -275,7 +276,7 @@ impl Renderer {
                         let mut color = tile.color[src_index as usize];
 
                         // Apply fixed exposure
-                        color *= Vec3x4::splat(3.5);
+                        color *= Vec3x4::splat(2.0);
 
                         // Tonemap to sRGB
                         color = tonemap(color);
@@ -466,9 +467,9 @@ impl Renderer {
                 let normal_world2 = rotation_matrix * normals[i2];
 
                 // Rotate tangents to world space (assume uniform scaling)
-                let tangent_world0 = rotation_matrix * tangents[i0];
-                let tangent_world1 = rotation_matrix * tangents[i1];
-                let tangent_world2 = rotation_matrix * tangents[i2];
+                let tangent_world0 = rotation_matrix * tangents[i0].truncate();
+                let tangent_world1 = rotation_matrix * tangents[i1].truncate();
+                let tangent_world2 = rotation_matrix * tangents[i2].truncate();
 
                 let triangle = Triangle {
                     vertices: [
@@ -476,21 +477,36 @@ impl Renderer {
                             pos_clip: clip0,
                             pos_world: world0,
                             normal: normal_world0,
-                            tangent: tangent_world0,
+                            tangent: Vec4::new(
+                                tangent_world0.x,
+                                tangent_world0.y,
+                                tangent_world0.z,
+                                tangents[i0].w,
+                            ),
                             uv: texcoords[i0],
                         },
                         Vertex {
                             pos_clip: clip1,
                             pos_world: world1,
                             normal: normal_world1,
-                            tangent: tangent_world1,
+                            tangent: Vec4::new(
+                                tangent_world1.x,
+                                tangent_world1.y,
+                                tangent_world1.z,
+                                tangents[i1].w,
+                            ),
                             uv: texcoords[i1],
                         },
                         Vertex {
                             pos_clip: clip2,
                             pos_world: world2,
                             normal: normal_world2,
-                            tangent: tangent_world2,
+                            tangent: Vec4::new(
+                                tangent_world2.x,
+                                tangent_world2.y,
+                                tangent_world2.z,
+                                tangents[i2].w,
+                            ),
                             uv: texcoords[i2],
                         },
                     ],
@@ -649,9 +665,14 @@ impl Renderer {
             triangle.vertices[2].normal,
         ];
         let tangents = [
-            triangle.vertices[0].tangent,
-            triangle.vertices[1].tangent,
-            triangle.vertices[2].tangent,
+            Vec3A::from(triangle.vertices[0].tangent.truncate()),
+            Vec3A::from(triangle.vertices[1].tangent.truncate()),
+            Vec3A::from(triangle.vertices[2].tangent.truncate()),
+        ];
+        let tangent_sign = [
+            triangle.vertices[0].tangent.w,
+            triangle.vertices[1].tangent.w,
+            triangle.vertices[2].tangent.w,
         ];
         let uv_over_w = [
             triangle.vertices[0].uv * one_over_w[0],
@@ -731,6 +752,7 @@ impl Renderer {
                         one_over_w: ScalarInterpolator::from_array(one_over_w),
                         normals: Vec3Interpolator::from_array(normals),
                         tangents: Vec3Interpolator::from_array(tangents),
+                        tangent_sign: ScalarInterpolator::from_array(tangent_sign),
                         u_over_w: ScalarInterpolator::new(
                             uv_over_w[0].x,
                             uv_over_w[1].x,

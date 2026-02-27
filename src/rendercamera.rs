@@ -25,7 +25,14 @@ pub struct RenderCamera {
 }
 
 impl RenderCamera {
-    pub fn new(position: Vec3A, look_at: Vec3A, fov: f32, width: f32, height: f32, far_plane: f32) -> Self {
+    pub fn new(
+        position: Vec3A,
+        look_at: Vec3A,
+        fov: f32,
+        width: f32,
+        height: f32,
+        far_plane: f32,
+    ) -> Self {
         // Calculate the forward direction (from position to look_at)
         let forward = (look_at - position).normalize();
 
