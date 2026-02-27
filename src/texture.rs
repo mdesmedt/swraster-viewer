@@ -225,62 +225,53 @@ impl TextureAndSampler {
         let offsets = self.texture.mip_offsets.gather(mip_level)
             + array_slice * self.texture.array_stride.gather(mip_level);
 
-        // Convert to texel coordinates
-        // Built-in to this logic is a half-texel offset so u,v maps to
-        // [0.5/DIM, 1 - 0.5/DIM] as a hack to hide edge discontinuities
-        let x_f = u * (width_f - Vec4::ONE);
-        let y_f = v * (height_f - Vec4::ONE);
+        let x = (u * (width_f - Vec4::ONE)).round();
+        let y = (v * (height_f - Vec4::ONE)).round();
+        let x = x.clamp(Vec4::ZERO, width_f - Vec4::ONE).as_uvec4();
+        let y = y.clamp(Vec4::ZERO, height_f - Vec4::ONE).as_uvec4();
 
-        let x0 = x_f.floor();
-        let y0 = y_f.floor();
-        let x1 = x0 + Vec4::ONE;
-        let y1 = y0 + Vec4::ONE;
-
-        let fx = x_f - x0;
-        let fy = y_f - y0;
-        let one_minus_fx = Vec4::ONE - fx;
-        let one_minus_fy = Vec4::ONE - fy;
-
-        let x0 = x0.clamp(Vec4::ZERO, width_f - Vec4::ONE);
-        let y0 = y0.clamp(Vec4::ZERO, height_f - Vec4::ONE);
-        let x1 = x1.clamp(Vec4::ZERO, width_f - Vec4::ONE);
-        let y1 = y1.clamp(Vec4::ZERO, height_f - Vec4::ONE);
-
-        let x0_i = x0.as_uvec4();
-        let y0_i = y0.as_uvec4();
-        let x1_i = x1.as_uvec4();
-        let y1_i = y1.as_uvec4();
-
-        let idx00 = offsets + y0_i * width_i + x0_i;
-        let idx10 = offsets + y0_i * width_i + x1_i;
-        let idx01 = offsets + y1_i * width_i + x0_i;
-        let idx11 = offsets + y1_i * width_i + x1_i;
-
-        let p00 = self.gather_rgb(idx00);
-        let p10 = self.gather_rgb(idx10);
-        let p01 = self.gather_rgb(idx01);
-        let p11 = self.gather_rgb(idx11);
-
-        let w00 = one_minus_fx * one_minus_fy;
-        let w10 = fx * one_minus_fy;
-        let w01 = one_minus_fx * fy;
-        let w11 = fx * fy;
-
-        Vec3x4 {
-            x: p00.x * w00 + p10.x * w10 + p01.x * w01 + p11.x * w11,
-            y: p00.y * w00 + p10.y * w10 + p01.y * w01 + p11.y * w11,
-            z: p00.z * w00 + p10.z * w10 + p01.z * w01 + p11.z * w11,
-        }
+        let idx = offsets + y * width_i + x;
+        self.gather_rgb(idx)
     }
 
     pub fn sample4_rgb(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec3x4 {
         let mip_level = self.compute_mip_level(du_dv);
-        self.sample_bilinear_rgb(u_vec, v_vec, mip_level, UVec4::ZERO)
+        let mip_usize = mip_level as usize;
+
+        let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
+        let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
+        let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
+        let offsets = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
+
+        let x =
+            Self::apply_wrap_mode((u_vec * width_f).floor(), width_f, &self.sampler.wrap_s)
+                .as_uvec4();
+        let y =
+            Self::apply_wrap_mode((v_vec * height_f).floor(), height_f, &self.sampler.wrap_t)
+                .as_uvec4();
+
+        let idx = offsets + y * width_i + x;
+        self.gather_rgb(idx)
     }
 
     pub fn sample4_alpha(&self, u_vec: Vec4, v_vec: Vec4, du_dv: Vec4) -> Vec4 {
         let mip_level = self.compute_mip_level(du_dv);
-        self.sample_bilinear_alpha(u_vec, v_vec, mip_level)
+        let mip_usize = mip_level as usize;
+
+        let width_i = UVec4::splat(self.texture.mip_widths[mip_usize]);
+        let width_f = Vec4::splat(self.texture.mip_widths_f[mip_usize]);
+        let height_f = Vec4::splat(self.texture.mip_heights_f[mip_usize]);
+        let offsets = UVec4::splat(self.texture.mip_offsets[mip_usize] as u32);
+
+        let x =
+            Self::apply_wrap_mode((u_vec * width_f).floor(), width_f, &self.sampler.wrap_s)
+                .as_uvec4();
+        let y =
+            Self::apply_wrap_mode((v_vec * height_f).floor(), height_f, &self.sampler.wrap_t)
+                .as_uvec4();
+
+        let idx = offsets + y * width_i + x;
+        self.gather_alpha(idx)
     }
 
     fn gather_rgb(&self, idx: UVec4) -> Vec3x4 {
@@ -296,6 +287,7 @@ impl TextureAndSampler {
         }
     }
 
+    #[allow(dead_code)]
     pub fn sample_bilinear_rgb(
         &self,
         u: Vec4,
@@ -367,6 +359,7 @@ impl TextureAndSampler {
         Vec4::new(a.w, b.w, c.w, d.w)
     }
 
+    #[allow(dead_code)]
     pub fn sample_bilinear_alpha(&self, u: Vec4, v: Vec4, mip_level: u32) -> Vec4 {
         let mip_usize = mip_level as usize;
 
