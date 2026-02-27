@@ -5,7 +5,7 @@ let
     pkg-config
     mold
     wayland
-    glfw-wayland
+    glfw
     libxkbcommon
     libGL
     vulkan-headers
