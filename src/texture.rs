@@ -276,8 +276,8 @@ fn sample_cubemap_direction_linear(cubemap: &TextureAndSampler, dir: Vec3A) -> V
     )
 }
 
-pub fn compute_irradiance_sh9(cubemap: &TextureAndSampler) -> [Vec3A; 9] {
-    let mut sh = [Vec3A::ZERO; 9];
+pub fn compute_irradiance_sh4(cubemap: &TextureAndSampler) -> [Vec3A; 4] {
+    let mut sh = [Vec3A::ZERO; 4];
     let width = cubemap.texture.width as f32;
     let height = cubemap.texture.height as f32;
     let texel_omega = (4.0 / width) * (4.0 / height);
@@ -294,19 +294,9 @@ pub fn compute_irradiance_sh9(cubemap: &TextureAndSampler) -> [Vec3A; 9] {
                 let x = dir.x;
                 let y = dir.y;
                 let z = dir.z;
-                let basis = [
-                    0.282095,
-                    0.488603 * y,
-                    0.488603 * z,
-                    0.488603 * x,
-                    1.092548 * x * y,
-                    1.092548 * y * z,
-                    0.315392 * (3.0 * z * z - 1.0),
-                    1.092548 * x * z,
-                    0.546274 * (x * x - y * y),
-                ];
+                let basis = [0.282095, 0.488603 * y, 0.488603 * z, 0.488603 * x];
 
-                for i in 0..9 {
+                for i in 0..4 {
                     sh[i] += color * (basis[i] * weight);
                 }
             }
@@ -315,13 +305,15 @@ pub fn compute_irradiance_sh9(cubemap: &TextureAndSampler) -> [Vec3A; 9] {
 
     // Convolve radiance SH to irradiance SH (Lambert)
     sh[0] *= std::f32::consts::PI;
-    for coeff in sh.iter_mut().take(4).skip(1) {
+    for coeff in &mut sh[1..4] {
         *coeff *= 2.0 * std::f32::consts::PI / 3.0;
     }
-    for coeff in sh.iter_mut().skip(4) {
-        *coeff *= std::f32::consts::PI / 4.0;
-    }
 
+    // Fold SH basis constants into coefficients
+    sh[0] *= 0.282095;
+    sh[1] *= 0.488603;
+    sh[2] *= 0.488603;
+    sh[3] *= 0.488603;
     sh
 }
 

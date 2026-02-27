@@ -99,29 +99,15 @@ impl<'a> PbrShaderParams<'a> {
     }
 }
 
-fn eval_irradiance_sh(coeffs: &[glam::Vec3A; 9], normal: Vec3x4) -> Vec3x4 {
+fn eval_irradiance_sh(coeffs: &[glam::Vec3A; 4], normal: Vec3x4) -> Vec3x4 {
     let x = normal.x;
     let y = normal.y;
     let z = normal.z;
 
-    let basis = [
-        Vec4::splat(0.282095),
-        y * Vec4::splat(0.488603),
-        z * Vec4::splat(0.488603),
-        x * Vec4::splat(0.488603),
-        x * y * Vec4::splat(1.092548),
-        y * z * Vec4::splat(1.092548),
-        (z * z * 3.0 - Vec4::ONE) * Vec4::splat(0.315392),
-        x * z * Vec4::splat(1.092548),
-        (x * x - y * y) * Vec4::splat(0.546274),
-    ];
-
-    let mut irradiance = Vec3x4::ZERO;
-    for i in 0..9 {
-        let c = coeffs[i];
-        irradiance += Vec3x4::from_vec3a(c) * basis[i];
-    }
-    irradiance
+    Vec3x4::from_vec3a(coeffs[0])
+        + Vec3x4::from_vec3a(coeffs[1]) * y
+        + Vec3x4::from_vec3a(coeffs[2]) * z
+        + Vec3x4::from_vec3a(coeffs[3]) * x
 }
 
 pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> Vec3x4 {

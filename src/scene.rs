@@ -71,7 +71,7 @@ pub struct Scene {
     pub voxel_grid: Option<crate::voxelgrid::VoxelGrid>,
     pub cubemap: TextureAndSampler,
     pub cubemap_specular: TextureAndSampler,
-    pub irradiance_sh: [Vec3A; 9],
+    pub irradiance_sh: [Vec3A; 4],
     pub brdf_lut: TextureAndSampler,
 }
 
@@ -169,7 +169,7 @@ impl Scene {
                 _mag_filter: Filter::Linear,
             },
         };
-        let irradiance_sh = compute_irradiance_sh9(&cubemap);
+        let irradiance_sh = compute_irradiance_sh4(&cubemap);
         let brdf_lut = TextureAndSampler {
             texture: Arc::new(generate_brdf_lut(128)),
             sampler: Sampler {
