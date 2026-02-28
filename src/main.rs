@@ -1,7 +1,6 @@
 use clap::Parser;
 use glam::{Vec2, Vec3A};
 use gltf::Gltf;
-use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -19,6 +18,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 mod bumpqueue;
+mod gi;
 mod math;
 mod raytracer;
 mod rendercamera;
@@ -33,6 +33,10 @@ mod voxelgrid;
 #[allow(dead_code)]
 mod scene;
 
+use gi::{
+    bake_voxel_gi, build_active_voxel_mask, compute_sun_visibility, save_gi_cache,
+    try_load_gi_cache,
+};
 use raytracer::RayTracer;
 use rendercamera::RenderCamera;
 use renderer::{RenderBuffer, Renderer};
@@ -63,6 +67,10 @@ struct Settings {
     /// Disable vsync
     #[arg(long)]
     no_vsync: bool,
+
+    /// Enable voxel GI SH4 (load from .gi cache or bake if missing)
+    #[arg(long)]
+    gi: bool,
 }
 
 struct RenderState {
@@ -219,15 +227,9 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
         )
     };
 
-    // Create and populate a voxel grid if shadows are enabled
-    if !settings.no_shadows {
-        // Create raytracer from the scene
-        println!("Creating raytracer");
-        let raytracer = RayTracer::new(&scene);
-
-        // Use 64x64x64 voxels
+    // Create and populate a voxel grid for direct shadowing and optional GI.
+    if !settings.no_shadows || settings.gi {
         const GRID_SIZE: usize = 128;
-
         let mut voxel_grid = VoxelGrid::new(
             GRID_SIZE,
             GRID_SIZE,
@@ -236,44 +238,49 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
             scene.bounds.max,
         );
 
-        // Fill voxel grid with light intensity based on visibility of the voxel center to the light
+        println!("Building BVH raytracer");
+        let raytracer = RayTracer::new(&scene);
+        println!("Marking active voxels");
+        build_active_voxel_mask(&raytracer, &scene, &mut voxel_grid);
+
         println!(
-            "Computing light intensity for {} voxels",
+            "Computing sun visibility for {} voxels",
             GRID_SIZE * GRID_SIZE * GRID_SIZE
         );
-        let light_direction = scene.light.direction;
-        let ray_dir = light_direction.normalize();
-        let voxel_size = voxel_grid.voxel_size();
-        let center_min = voxel_grid.world_min() + voxel_size * 0.5;
+        compute_sun_visibility(&raytracer, &scene, &mut voxel_grid);
 
-        voxel_grid
-            .par_iter_mut()
-            .for_each(|(coords, out_intensity)| {
-                // Compute ray origin with some bias to avoid self-shadowing
-                let voxel_center = center_min + coords.as_vec3a() * voxel_size;
-                let ray_origin = voxel_center + voxel_size * ray_dir * 3.0;
-
-                // Find all intersections along the ray
-                let intersections = raytracer.ray_intersect(ray_origin, ray_dir);
-
-                let mut intensity = 1.0;
-                for intersection in intersections {
-                    let material_index = raytracer.get_material_index(intersection);
-                    let material = &scene.materials[material_index];
-                    if !material.is_translucent {
-                        // Opaque
-                        intensity = 0.0;
-                        break;
-                    }
-                    // Translucent
-                    intensity *= material.transmission;
+        if settings.gi {
+            let gi_path = gltf_path.with_extension("gi");
+            println!("Checking GI cache: {}", gi_path.display());
+            match try_load_gi_cache(&gi_path, &mut voxel_grid) {
+                Ok(true) => {
+                    println!("Loaded GI cache: {}", gi_path.display());
                 }
-
-                *out_intensity = intensity;
-            });
-
-        // Apply simple blur to smooth the voxel grid
-        voxel_grid.blur_grid();
+                Ok(false) => {
+                    bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
+                    println!("Writing GI cache: {}", gi_path.display());
+                    if let Err(err) = save_gi_cache(&gi_path, &voxel_grid) {
+                        eprintln!("Failed to write GI cache {}: {}", gi_path.display(), err);
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Failed to read GI cache {} (recomputing): {}",
+                        gi_path.display(),
+                        err
+                    );
+                    bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
+                    println!("Writing GI cache: {}", gi_path.display());
+                    if let Err(write_err) = save_gi_cache(&gi_path, &voxel_grid) {
+                        eprintln!(
+                            "Failed to write GI cache {}: {}",
+                            gi_path.display(),
+                            write_err
+                        );
+                    }
+                }
+            }
+        }
 
         println!("Voxel grid ready");
         scene.voxel_grid = Some(voxel_grid);
