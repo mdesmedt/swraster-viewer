@@ -10,7 +10,7 @@ pub struct VoxelGrid {
     world_min: Vec3A,
     world_max: Vec3A,
     light_intensity: Vec<f32>,
-    gi_sh4: Option<Vec<[Vec3A; 4]>>,
+    gi_sh4: Vec<[Vec4; 4]>,
     surface_normals: Option<Vec<Vec3A>>,
     surface_albedo: Option<Vec<Vec3A>>,
     occupied_mask: Option<Vec<bool>>,
@@ -27,6 +27,7 @@ impl VoxelGrid {
         world_max: Vec3A,
     ) -> Self {
         let light_intensity = vec![0.0; width * height * depth];
+        let gi_sh4 = vec![[Vec4::ZERO; 4]; width * height * depth];
         Self {
             width,
             height,
@@ -34,7 +35,7 @@ impl VoxelGrid {
             world_min,
             world_max,
             light_intensity,
-            gi_sh4: None,
+            gi_sh4,
             surface_normals: None,
             surface_albedo: None,
             occupied_mask: None,
@@ -84,31 +85,20 @@ impl VoxelGrid {
     }
 
     #[allow(dead_code)]
-    pub fn allocate_gi_sh4(&mut self) {
-        self.gi_sh4 = Some(vec![[Vec3A::ZERO; 4]; self.voxel_count()]);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_gi_sh4(&mut self, x: usize, y: usize, z: usize, coeffs: [Vec3A; 4]) {
+    pub fn set_gi_sh4(&mut self, x: usize, y: usize, z: usize, coeffs: [Vec4; 4]) {
         let index = self.voxel_index(x, y, z);
-        if let Some(gi_data) = &mut self.gi_sh4 {
-            if let Some(slot) = gi_data.get_mut(index) {
-                *slot = coeffs;
-            }
+        if let Some(slot) = self.gi_sh4.get_mut(index) {
+            *slot = coeffs;
         }
     }
 
-    pub fn set_all_gi_sh4(&mut self, coeffs: Vec<[Vec3A; 4]>) {
+    pub fn set_all_gi_sh4(&mut self, coeffs: Vec<[Vec4; 4]>) {
         assert!(coeffs.len() == self.voxel_count());
-        self.gi_sh4 = Some(coeffs);
+        self.gi_sh4 = coeffs;
     }
 
-    pub fn has_gi_sh4(&self) -> bool {
-        self.gi_sh4.is_some()
-    }
-
-    pub fn gi_sh4(&self) -> Option<&Vec<[Vec3A; 4]>> {
-        self.gi_sh4.as_ref()
+    pub fn gi_sh4(&self) -> &Vec<[Vec4; 4]> {
+        &self.gi_sh4
     }
 
     pub fn set_active_mask(&mut self, mask: Vec<bool>) {
@@ -177,22 +167,23 @@ impl VoxelGrid {
     }
 
     fn get_gi_coeff(
-        gi_data: &[[Vec3A; 4]],
+        gi_data: &[[Vec4; 4]],
         coeff_index: usize,
         x: usize,
         y: usize,
         z: usize,
         width: usize,
         height: usize,
-    ) -> Vec3A {
+    ) -> Vec4 {
         let index = z * width * height + y * width + x;
         gi_data
             .get(index)
             .map(|coeffs| coeffs[coeff_index])
-            .unwrap_or(Vec3A::ZERO)
+            .unwrap_or(Vec4::ZERO)
     }
 
     /// Get linearly filtered light intensity for 4 world positions
+    #[allow(dead_code)]
     pub fn get_filtered_light_intensity_vec(&self, pos_world: Vec3x4) -> Vec4 {
         // Convert world positions to voxel coordinates
         let voxel_size = self.voxel_size();
@@ -270,11 +261,8 @@ impl VoxelGrid {
         v0 * (Vec4::ONE - fz) + v1 * fz
     }
 
-    pub fn get_filtered_gi_sh4_vec(&self, pos_world: Vec3x4) -> [Vec3x4; 4] {
-        let Some(gi_data) = &self.gi_sh4 else {
-            return [Vec3x4::ZERO; 4];
-        };
-
+    pub fn get_filtered_gi_sh4_packed_vec(&self, pos_world: Vec3x4) -> ([Vec3x4; 4], [Vec4; 4]) {
+        let gi_data = &self.gi_sh4;
         let voxel_size = self.voxel_size();
         let voxel_x_f = (pos_world.x - self.world_min.x) / voxel_size.x;
         let voxel_y_f = (pos_world.y - self.world_min.y) / voxel_size.y;
@@ -315,7 +303,11 @@ impl VoxelGrid {
         let fy = voxel_y_f - y0_f;
         let fz = voxel_z_f - z0_f;
 
-        let sample_grid = |coeff_idx: usize, x: USizeVec4, y: USizeVec4, z: USizeVec4| -> Vec3x4 {
+        let sample_grid_rgb = |coeff_idx: usize,
+                               x: USizeVec4,
+                               y: USizeVec4,
+                               z: USizeVec4|
+         -> Vec3x4 {
             let a = Self::get_gi_coeff(gi_data, coeff_idx, x.x, y.x, z.x, self.width, self.height);
             let b = Self::get_gi_coeff(gi_data, coeff_idx, x.y, y.y, z.y, self.width, self.height);
             let c = Self::get_gi_coeff(gi_data, coeff_idx, x.z, y.z, z.z, self.width, self.height);
@@ -326,17 +318,25 @@ impl VoxelGrid {
                 Vec4::new(a.z, b.z, c.z, d.z),
             )
         };
+        let sample_grid_w = |coeff_idx: usize, x: USizeVec4, y: USizeVec4, z: USizeVec4| -> Vec4 {
+            let a = Self::get_gi_coeff(gi_data, coeff_idx, x.x, y.x, z.x, self.width, self.height);
+            let b = Self::get_gi_coeff(gi_data, coeff_idx, x.y, y.y, z.y, self.width, self.height);
+            let c = Self::get_gi_coeff(gi_data, coeff_idx, x.z, y.z, z.z, self.width, self.height);
+            let d = Self::get_gi_coeff(gi_data, coeff_idx, x.w, y.w, z.w, self.width, self.height);
+            Vec4::new(a.w, b.w, c.w, d.w)
+        };
 
-        let mut out = [Vec3x4::ZERO; 4];
-        for (coeff_idx, coeff_out) in out.iter_mut().enumerate() {
-            let v000 = sample_grid(coeff_idx, x0, y0, z0);
-            let v001 = sample_grid(coeff_idx, x0, y0, z1);
-            let v010 = sample_grid(coeff_idx, x0, y1, z0);
-            let v011 = sample_grid(coeff_idx, x0, y1, z1);
-            let v100 = sample_grid(coeff_idx, x1, y0, z0);
-            let v101 = sample_grid(coeff_idx, x1, y0, z1);
-            let v110 = sample_grid(coeff_idx, x1, y1, z0);
-            let v111 = sample_grid(coeff_idx, x1, y1, z1);
+        let mut out_rgb = [Vec3x4::ZERO; 4];
+        let mut out_w = [Vec4::ZERO; 4];
+        for coeff_idx in 0..4 {
+            let v000 = sample_grid_rgb(coeff_idx, x0, y0, z0);
+            let v001 = sample_grid_rgb(coeff_idx, x0, y0, z1);
+            let v010 = sample_grid_rgb(coeff_idx, x0, y1, z0);
+            let v011 = sample_grid_rgb(coeff_idx, x0, y1, z1);
+            let v100 = sample_grid_rgb(coeff_idx, x1, y0, z0);
+            let v101 = sample_grid_rgb(coeff_idx, x1, y0, z1);
+            let v110 = sample_grid_rgb(coeff_idx, x1, y1, z0);
+            let v111 = sample_grid_rgb(coeff_idx, x1, y1, z1);
 
             let v00 = v000 * (Vec4::ONE - fx) + v100 * fx;
             let v01 = v001 * (Vec4::ONE - fx) + v101 * fx;
@@ -344,9 +344,27 @@ impl VoxelGrid {
             let v11 = v011 * (Vec4::ONE - fx) + v111 * fx;
             let v0 = v00 * (Vec4::ONE - fy) + v10 * fy;
             let v1 = v01 * (Vec4::ONE - fy) + v11 * fy;
-            *coeff_out = v0 * (Vec4::ONE - fz) + v1 * fz;
+            out_rgb[coeff_idx] = v0 * (Vec4::ONE - fz) + v1 * fz;
+
+            let w000 = sample_grid_w(coeff_idx, x0, y0, z0);
+            let w001 = sample_grid_w(coeff_idx, x0, y0, z1);
+            let w010 = sample_grid_w(coeff_idx, x0, y1, z0);
+            let w011 = sample_grid_w(coeff_idx, x0, y1, z1);
+            let w100 = sample_grid_w(coeff_idx, x1, y0, z0);
+            let w101 = sample_grid_w(coeff_idx, x1, y0, z1);
+            let w110 = sample_grid_w(coeff_idx, x1, y1, z0);
+            let w111 = sample_grid_w(coeff_idx, x1, y1, z1);
+
+            let w00 = w000 * (Vec4::ONE - fx) + w100 * fx;
+            let w01 = w001 * (Vec4::ONE - fx) + w101 * fx;
+            let w10 = w010 * (Vec4::ONE - fx) + w110 * fx;
+            let w11 = w011 * (Vec4::ONE - fx) + w111 * fx;
+            let w0 = w00 * (Vec4::ONE - fy) + w10 * fy;
+            let w1 = w01 * (Vec4::ONE - fy) + w11 * fy;
+            out_w[coeff_idx] = w0 * (Vec4::ONE - fz) + w1 * fz;
         }
-        out
+
+        (out_rgb, out_w)
     }
 
     /// Blur light intensity for a voxel with a 3x3x3 filter
@@ -402,18 +420,14 @@ impl VoxelGrid {
 
     /// Simple 3x3x3 blur filter to smooth GI SH4 coefficients.
     pub fn blur_gi_sh4(&mut self) {
-        let Some(gi_data) = self.gi_sh4.as_ref() else {
-            return;
-        };
-
-        let source = gi_data.clone();
-        let mut blurred = vec![[Vec3A::ZERO; 4]; source.len()];
+        let source = self.gi_sh4.clone();
+        let mut blurred = vec![[Vec4::ZERO; 4]; source.len()];
 
         for z in 0..self.depth {
             for y in 0..self.height {
                 for x in 0..self.width {
                     let index = self.voxel_index(x, y, z);
-                    let mut sum = [Vec3A::ZERO; 4];
+                    let mut sum = [Vec4::ZERO; 4];
                     let mut count = 0.0f32;
 
                     for dz in -1..=1 {
@@ -454,6 +468,6 @@ impl VoxelGrid {
             }
         }
 
-        self.gi_sh4 = Some(blurred);
+        self.gi_sh4 = blurred;
     }
 }

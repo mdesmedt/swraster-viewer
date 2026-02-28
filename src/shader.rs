@@ -99,17 +99,6 @@ impl<'a> PbrShaderParams<'a> {
     }
 }
 
-fn eval_irradiance_sh(coeffs: &[glam::Vec3A; 4], normal: Vec3x4) -> Vec3x4 {
-    let x = normal.x;
-    let y = normal.y;
-    let z = normal.z;
-
-    Vec3x4::from_vec3a(coeffs[0])
-        + Vec3x4::from_vec3a(coeffs[1]) * y
-        + Vec3x4::from_vec3a(coeffs[2]) * z
-        + Vec3x4::from_vec3a(coeffs[3]) * x
-}
-
 fn eval_irradiance_sh_vec(coeffs: [Vec3x4; 4], normal: Vec3x4) -> Vec3x4 {
     let x = normal.x;
     let y = normal.y;
@@ -178,12 +167,10 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     let n_dot_v = normal_world.dot(view_normal).max(Vec4::splat(1.0e-4));
     let v_dot_h = view_normal.dot(half_vector).max(Vec4::ZERO);
 
-    // Get voxel grid lighting if available, for shadows
-    let voxel_light_intensity = if let Some(voxel_grid) = &scene.voxel_grid {
-        voxel_grid.get_filtered_light_intensity_vec(pos_world)
-    } else {
-        Vec4::ONE
-    };
+    let voxel_grid = &scene.voxel_grid;
+    let (gi_coeffs_rgb, gi_coeffs_w) = voxel_grid.get_filtered_gi_sh4_packed_vec(pos_world);
+    let voxel_light_intensity = gi_coeffs_w[0].clamp(Vec4::ZERO, Vec4::ONE);
+    let sky_visibility = gi_coeffs_w[1].clamp(Vec4::ZERO, Vec4::ONE);
 
     let mut base_color_diffuse = Vec3x4::from_f32(
         material.base_color_factor.x,
@@ -250,36 +237,10 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
         light_color * brdf_f_direct * specular_dg * n_dot_l * voxel_light_intensity;
 
     // Indirect diffuse/specular IBL
-    let one_minus_nv = Vec4::ONE - n_dot_v;
-    let one_minus_nv2 = one_minus_nv * one_minus_nv;
-    let one_minus_nv4 = one_minus_nv2 * one_minus_nv2;
-    let one_minus_nv5 = one_minus_nv4 * one_minus_nv;
-
-    let using_voxel_gi = scene
-        .voxel_grid
-        .as_ref()
-        .map(|v| v.has_gi_sh4())
-        .unwrap_or(false);
-
-    let mut color_indirect_diffuse = if using_voxel_gi {
-        let k_d_diffuse_voxel_gi = (Vec3x4::ONE - f0) * (Vec4::ONE - metallic);
-        let voxel_grid = scene.voxel_grid.as_ref().unwrap();
-        let coeffs = voxel_grid.get_filtered_gi_sh4_vec(pos_world);
-        let irradiance = eval_irradiance_sh_vec(coeffs, normal_world).max(Vec4::ZERO);
-        irradiance * base_color_diffuse * k_d_diffuse_voxel_gi
-    } else {
-        let one_minus_roughness = Vec4::ONE - roughness;
-        let f_ibl_90 = f0.max(one_minus_roughness);
-        let k_s_ibl = f0 + (f_ibl_90 - f0) * one_minus_nv5;
-        let k_d_ibl = (Vec3x4::ONE - k_s_ibl) * (Vec4::ONE - metallic);
-        let irradiance = eval_irradiance_sh(&scene.irradiance_sh, normal_world).max(Vec4::ZERO);
-        irradiance * base_color_diffuse * k_d_ibl * Vec4::splat(1.0 / std::f32::consts::PI)
-    };
-
-    // Legacy ambient-darkening hack only applies to scene-wide ambient, not voxel GI.
-    if !using_voxel_gi {
-        color_indirect_diffuse *= voxel_light_intensity * Vec4::splat(0.75) + Vec4::splat(0.25);
-    }
+    let k_d_indirect = (Vec3x4::ONE - f0) * (Vec4::ONE - metallic);
+    let irradiance = eval_irradiance_sh_vec(gi_coeffs_rgb, normal_world).max(Vec4::ZERO);
+    let color_indirect_diffuse =
+        irradiance * base_color_diffuse * k_d_indirect * Vec4::splat(1.0 / std::f32::consts::PI);
 
     let reflect_dir = (view_normal * -1.0).reflect(normal_world);
     let spec_mip = roughness * scene.cubemap_specular.texture.max_mip_level_vec;
@@ -296,12 +257,9 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
     brdf_spec_factor += brdf_lut.y;
     let mut color_indirect_specular = prefiltered_env * brdf_spec_factor;
 
-    // AO only affects indirect lighting; skip diffuse AO for voxel GI to avoid double-darkening.
-    if !using_voxel_gi {
-        color_indirect_diffuse *= ao;
-    }
+    // AO only affects indirect lighting.
     let ao_spec = Vec4::ONE + (ao - Vec4::ONE) * Vec4::splat(0.5);
-    color_indirect_specular *= ao_spec;
+    color_indirect_specular *= ao_spec * sky_visibility;
 
     // Assemble lit color
     let mut color = if TRANSLUCENT {

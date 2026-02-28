@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 const SH4_COEFF_COUNT: usize = 4;
-const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 3;
+const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 4;
 const RAY_EPSILON: f32 = 1.0e-4;
 const GI_CACHE_MAGIC: [u8; 4] = *b"VGI0";
-const GI_CACHE_VERSION: u32 = 3;
+const GI_CACHE_VERSION: u32 = 4;
 const GI_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
 
-const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 128;
+const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 32;
 const GI_BOUNCE_ALBEDO_SCALE: f32 = 1.0;
 const GI_ACTIVE_DILATION_RADIUS: usize = 2;
 
@@ -48,7 +48,7 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
         return Ok(false);
     }
 
-    let mut coeffs = vec![[Vec3A::ZERO; SH4_COEFF_COUNT]; voxel_grid.voxel_count()];
+    let mut coeffs = vec![[Vec4::ZERO; SH4_COEFF_COUNT]; voxel_grid.voxel_count()];
     let mut byte_index = GI_CACHE_HEADER_BYTES;
     for voxel_coeffs in &mut coeffs {
         for coeff in voxel_coeffs.iter_mut().take(SH4_COEFF_COUNT) {
@@ -58,7 +58,9 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
             byte_index += 4;
             let b = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
             byte_index += 4;
-            *coeff = Vec3A::new(r, g, b);
+            let w = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
+            byte_index += 4;
+            *coeff = Vec4::new(r, g, b, w);
         }
     }
 
@@ -67,10 +69,7 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
 }
 
 pub fn save_gi_cache(path: &Path, voxel_grid: &VoxelGrid) -> io::Result<()> {
-    let Some(gi_data) = voxel_grid.gi_sh4() else {
-        return Ok(());
-    };
-
+    let gi_data = voxel_grid.gi_sh4();
     let mut bytes = Vec::with_capacity(expected_gi_bytes(voxel_grid));
     bytes.extend_from_slice(&GI_CACHE_MAGIC);
     bytes.extend_from_slice(&GI_CACHE_VERSION.to_le_bytes());
@@ -83,6 +82,7 @@ pub fn save_gi_cache(path: &Path, voxel_grid: &VoxelGrid) -> io::Result<()> {
             bytes.extend_from_slice(&coeff.x.to_le_bytes());
             bytes.extend_from_slice(&coeff.y.to_le_bytes());
             bytes.extend_from_slice(&coeff.z.to_le_bytes());
+            bytes.extend_from_slice(&coeff.w.to_le_bytes());
         }
     }
     fs::write(path, bytes)
@@ -94,6 +94,28 @@ pub fn expected_gi_bytes(voxel_grid: &VoxelGrid) -> usize {
 
 fn expected_gi_payload_bytes(voxel_grid: &VoxelGrid) -> usize {
     voxel_grid.voxel_count() * SH4_FLOATS_PER_VOXEL * std::mem::size_of::<f32>()
+}
+
+pub fn initialize_voxel_gi_from_scene(
+    scene: &Scene,
+    voxel_grid: &mut VoxelGrid,
+    sky_visibility: f32,
+) {
+    let total = voxel_grid.voxel_count();
+    let (w, h, _) = voxel_grid.dimensions();
+    let mut coeffs = vec![[Vec4::ZERO; SH4_COEFF_COUNT]; total];
+    for (index, out) in coeffs.iter_mut().enumerate() {
+        let z = index / (w * h);
+        let rem = index % (w * h);
+        let y = rem / w;
+        let x = rem % w;
+        for (i, sh) in scene.irradiance_sh.iter().enumerate() {
+            out[i] = Vec4::new(sh.x, sh.y, sh.z, 0.0);
+        }
+        out[0].w = voxel_grid.get_light_intensity(x, y, z);
+        out[1].w = sky_visibility;
+    }
+    voxel_grid.set_all_gi_sh4(coeffs);
 }
 
 pub fn build_active_voxel_mask(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut VoxelGrid) {
@@ -282,7 +304,8 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
     let gi_tmin = (min_voxel_edge * 0.15).max(RAY_EPSILON);
     let done = AtomicUsize::new(0);
     let print_step = (active_total / 100).max(1);
-    let mut out_coeffs = vec![[Vec3A::ZERO; SH4_COEFF_COUNT]; total];
+    initialize_voxel_gi_from_scene(scene, voxel_grid, 1.0);
+    let mut out_coeffs = voxel_grid.gi_sh4().clone();
 
     if active_total == 0 {
         voxel_grid.set_all_gi_sh4(out_coeffs);
@@ -304,8 +327,10 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
             let y = rem / width;
             let x = rem % width;
             let voxel_center = center_min + Vec3A::new(x as f32, y as f32, z as f32) * voxel_size;
+            let sun_visibility = voxel_grid.get_light_intensity(x, y, z);
 
             let mut radiance_sh = [Vec3A::ZERO; SH4_COEFF_COUNT];
+            let mut sky_hit_count = 0u32;
             for dir in &primary_dirs {
                 let ray_origin = voxel_center + *dir * primary_bias;
                 let incident_radiance = if let Some(hit) =
@@ -315,6 +340,7 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
                         raytracer, scene, &hit, *dir, light_dir, hit_bias, gi_tmin,
                     )
                 } else {
+                    sky_hit_count += 1;
                     sample_sky_radiance(scene, *dir)
                 };
 
@@ -324,8 +350,14 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
                 project_radiance_sh4(*dir, incident_radiance, primary_weight, &mut radiance_sh);
             }
 
-            *coeffs_out = radiance_to_irradiance_sh4(radiance_sh);
-            coeffs_out[0] = coeffs_out[0].max(Vec3A::ZERO);
+            let irradiance = radiance_to_irradiance_sh4(radiance_sh);
+            let sky_visibility = sky_hit_count as f32 / primary_dirs.len() as f32;
+            for c in 0..SH4_COEFF_COUNT {
+                let rgb = irradiance[c].max(Vec3A::ZERO);
+                coeffs_out[c] = Vec4::new(rgb.x, rgb.y, rgb.z, 0.0);
+            }
+            coeffs_out[0].w = sun_visibility;
+            coeffs_out[1].w = sky_visibility;
 
             let completed = done.fetch_add(1, Ordering::Relaxed) + 1;
             if completed % print_step == 0 || completed == active_total {

@@ -34,8 +34,8 @@ mod voxelgrid;
 mod scene;
 
 use gi::{
-    bake_voxel_gi, build_active_voxel_mask, compute_sun_visibility, save_gi_cache,
-    try_load_gi_cache,
+    bake_voxel_gi, build_active_voxel_mask, compute_sun_visibility, initialize_voxel_gi_from_scene,
+    save_gi_cache, try_load_gi_cache,
 };
 use raytracer::RayTracer;
 use rendercamera::RenderCamera;
@@ -59,10 +59,6 @@ struct Settings {
     /// GLTF file to load
     #[arg(default_value = "glTF-Sample-Assets/Models/FlightHelmet/glTF/FlightHelmet.gltf")]
     file: String,
-
-    /// Disable shadows
-    #[arg(long)]
-    no_shadows: bool,
 
     /// Disable vsync
     #[arg(long)]
@@ -227,66 +223,64 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
         )
     };
 
-    // Create and populate a voxel grid for direct shadowing and optional GI.
-    if !settings.no_shadows || settings.gi {
-        const GRID_SIZE: usize = 128;
-        let mut voxel_grid = VoxelGrid::new(
-            GRID_SIZE,
-            GRID_SIZE,
-            GRID_SIZE,
-            scene.bounds.min,
-            scene.bounds.max,
-        );
+    // Create and populate a voxel grid for direct shadowing and GI/IBL auxiliaries.
+    const GRID_SIZE: usize = 128;
+    let mut voxel_grid = VoxelGrid::new(
+        GRID_SIZE,
+        GRID_SIZE,
+        GRID_SIZE,
+        scene.bounds.min,
+        scene.bounds.max,
+    );
 
-        println!("Building BVH raytracer");
-        let raytracer = RayTracer::new(&scene);
-        println!("Marking active voxels");
-        build_active_voxel_mask(&raytracer, &scene, &mut voxel_grid);
+    println!("Building BVH raytracer");
+    let raytracer = RayTracer::new(&scene);
+    println!("Marking active voxels");
+    build_active_voxel_mask(&raytracer, &scene, &mut voxel_grid);
 
-        println!(
-            "Computing sun visibility for {} voxels",
-            GRID_SIZE * GRID_SIZE * GRID_SIZE
-        );
-        compute_sun_visibility(&raytracer, &scene, &mut voxel_grid);
+    println!(
+        "Computing sun visibility for {} voxels",
+        GRID_SIZE * GRID_SIZE * GRID_SIZE
+    );
+    compute_sun_visibility(&raytracer, &scene, &mut voxel_grid);
 
-        if settings.gi {
-            let gi_path = gltf_path.with_extension("gi");
-            println!("Checking GI cache: {}", gi_path.display());
-            match try_load_gi_cache(&gi_path, &mut voxel_grid) {
-                Ok(true) => {
-                    println!("Loaded GI cache: {}", gi_path.display());
+    if settings.gi {
+        let gi_path = gltf_path.with_extension("gi");
+        println!("Checking GI cache: {}", gi_path.display());
+        match try_load_gi_cache(&gi_path, &mut voxel_grid) {
+            Ok(true) => {
+                println!("Loaded GI cache: {}", gi_path.display());
+            }
+            Ok(false) => {
+                bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
+                println!("Writing GI cache: {}", gi_path.display());
+                if let Err(err) = save_gi_cache(&gi_path, &voxel_grid) {
+                    eprintln!("Failed to write GI cache {}: {}", gi_path.display(), err);
                 }
-                Ok(false) => {
-                    bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
-                    println!("Writing GI cache: {}", gi_path.display());
-                    if let Err(err) = save_gi_cache(&gi_path, &voxel_grid) {
-                        eprintln!("Failed to write GI cache {}: {}", gi_path.display(), err);
-                    }
-                }
-                Err(err) => {
+            }
+            Err(err) => {
+                eprintln!(
+                    "Failed to read GI cache {} (recomputing): {}",
+                    gi_path.display(),
+                    err
+                );
+                bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
+                println!("Writing GI cache: {}", gi_path.display());
+                if let Err(write_err) = save_gi_cache(&gi_path, &voxel_grid) {
                     eprintln!(
-                        "Failed to read GI cache {} (recomputing): {}",
+                        "Failed to write GI cache {}: {}",
                         gi_path.display(),
-                        err
+                        write_err
                     );
-                    bake_voxel_gi(&raytracer, &scene, &mut voxel_grid);
-                    println!("Writing GI cache: {}", gi_path.display());
-                    if let Err(write_err) = save_gi_cache(&gi_path, &voxel_grid) {
-                        eprintln!(
-                            "Failed to write GI cache {}: {}",
-                            gi_path.display(),
-                            write_err
-                        );
-                    }
                 }
             }
         }
-
-        println!("Voxel grid ready");
-        scene.voxel_grid = Some(voxel_grid);
     } else {
-        scene.voxel_grid = None;
+        initialize_voxel_gi_from_scene(&scene, &mut voxel_grid, 1.0);
     }
+
+    println!("Voxel grid ready");
+    scene.voxel_grid = voxel_grid;
 
     // Create and store the render state
     let render_state = RenderState { scene, camera };
