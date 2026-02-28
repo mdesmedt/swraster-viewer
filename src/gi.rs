@@ -100,6 +100,7 @@ fn expected_gi_payload_bytes(voxel_grid: &VoxelGrid) -> usize {
 pub fn initialize_voxel_gi_from_scene(
     scene: &Scene,
     voxel_grid: &mut VoxelGrid,
+    irradiance_scale: f32,
     sky_visibility: f32,
 ) {
     let total = voxel_grid.voxel_count();
@@ -111,7 +112,12 @@ pub fn initialize_voxel_gi_from_scene(
         let y = rem / w;
         let x = rem % w;
         for (i, sh) in scene.irradiance_sh.iter().enumerate() {
-            out[i] = Vec4::new(sh.x, sh.y, sh.z, 0.0);
+            out[i] = Vec4::new(
+                sh.x * irradiance_scale,
+                sh.y * irradiance_scale,
+                sh.z * irradiance_scale,
+                0.0,
+            );
         }
         out[0].w = voxel_grid.get_light_intensity(x, y, z);
         out[1].w = sky_visibility;
@@ -305,7 +311,7 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
     let gi_tmin = (min_voxel_edge * 0.15).max(RAY_EPSILON);
     let done = AtomicUsize::new(0);
     let print_step = (active_total / 100).max(1);
-    initialize_voxel_gi_from_scene(scene, voxel_grid, 1.0);
+    initialize_voxel_gi_from_scene(scene, voxel_grid, 1.0, 1.0);
     let mut out_coeffs = voxel_grid.gi_sh4().clone();
 
     if active_total == 0 {

@@ -254,16 +254,9 @@ impl Renderer {
         self.frame_count += 1;
     }
 
-    pub fn update_auto_exposure_from_random_sample(&mut self) {
-        if self.tiles.is_empty() {
-            return;
-        }
-
+    pub fn update_auto_exposure(&mut self) {
         let tile_index = self.random_index(self.tiles.len());
         let quad_count = self.tiles[tile_index].color.len();
-        if quad_count == 0 {
-            return;
-        }
 
         let quad_index = self.random_index(quad_count);
         let tile = &self.tiles[tile_index];

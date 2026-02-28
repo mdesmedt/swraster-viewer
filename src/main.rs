@@ -51,6 +51,7 @@ const CAMERA_SPEED: f32 = 0.15; // Speed relative to scene size per second
 const CAMERA_SPEED_FAST: f32 = 0.5; // Speed when shift is pressed
 const KEY_ROTATION_SPEED: f32 = 75.0;
 const KEY_ROTATION_SPEED_FAST: f32 = 150.0;
+const GI_FALLBACK_SCENE_SH_SCALE: f32 = 0.25;
 
 #[derive(Parser, Clone)]
 #[command(name = "swrast")]
@@ -276,7 +277,7 @@ fn load_scene(gltf_path: &Path, loading_state: &Arc<Mutex<LoadingState>>, settin
             }
         }
     } else {
-        initialize_voxel_gi_from_scene(&scene, &mut voxel_grid, 1.0);
+        initialize_voxel_gi_from_scene(&scene, &mut voxel_grid, GI_FALLBACK_SCENE_SH_SCALE, 1.0);
     }
 
     println!("Voxel grid ready");
@@ -536,7 +537,8 @@ impl App {
                         let renderer = &mut *renderer_guard;
                         // Render the scene
                         renderer.render_scene(&render_state.scene, camera);
-                        renderer.update_auto_exposure_from_random_sample();
+                        // Update exposure
+                        renderer.update_auto_exposure();
                         // Blit tiles to the current backbuffer
                         renderer.blit_to_buffer(&mut render_buffer);
                     }
