@@ -280,7 +280,7 @@ pub fn compute_irradiance_sh4(cubemap: &TextureAndSampler) -> [Vec3A; 4] {
     let mut sh = [Vec3A::ZERO; 4];
     let width = cubemap.texture.width as f32;
     let height = cubemap.texture.height as f32;
-    let texel_omega = (4.0 / width) * (4.0 / height);
+    let texel_omega = (2.0 / width) * (2.0 / height);
 
     for face in 0..6 {
         for y in 0..cubemap.texture.height {
