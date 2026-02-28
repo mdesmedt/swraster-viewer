@@ -536,6 +536,7 @@ impl App {
                         let renderer = &mut *renderer_guard;
                         // Render the scene
                         renderer.render_scene(&render_state.scene, camera);
+                        renderer.update_auto_exposure_from_random_sample();
                         // Blit tiles to the current backbuffer
                         renderer.blit_to_buffer(&mut render_buffer);
                     }

@@ -12,6 +12,12 @@ use std::time::{Duration, Instant};
 
 // Size (width and height) of raster tiles in pixels
 const TILE_SIZE: i32 = 64;
+const DEFAULT_EXPOSURE: f32 = 2.0;
+const AUTO_EXPOSURE_KEY: f32 = 0.18;
+const AUTO_EXPOSURE_HYSTERESIS: f32 = 0.002;
+const AUTO_EXPOSURE_MIN: f32 = 0.05;
+const AUTO_EXPOSURE_MAX: f32 = 32.0;
+const AUTO_EXPOSURE_EPSILON: f32 = 1e-4;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -147,6 +153,10 @@ pub struct Renderer {
     timer_rasterizer: Duration,
     last_print_time: Instant,
     frame_count: u32,
+    auto_exposure: f32,
+    auto_exposure_target: f32,
+    auto_exposure_log_luminance: f32,
+    rng_state: u64,
 }
 
 impl Renderer {
@@ -179,6 +189,10 @@ impl Renderer {
             timer_rasterizer: Duration::ZERO,
             last_print_time: Instant::now(),
             frame_count: 0,
+            auto_exposure: DEFAULT_EXPOSURE,
+            auto_exposure_target: DEFAULT_EXPOSURE,
+            auto_exposure_log_luminance: (AUTO_EXPOSURE_KEY / DEFAULT_EXPOSURE).ln(),
+            rng_state: 0x6a09e667f3bcc909,
         }
     }
 
@@ -240,6 +254,56 @@ impl Renderer {
         self.frame_count += 1;
     }
 
+    pub fn update_auto_exposure_from_random_sample(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+
+        let tile_index = self.random_index(self.tiles.len());
+        let quad_count = self.tiles[tile_index].color.len();
+        if quad_count == 0 {
+            return;
+        }
+
+        let quad_index = self.random_index(quad_count);
+        let tile = &self.tiles[tile_index];
+        let quad = tile.color[quad_index];
+
+        // Estimate scene luminance from one stochastic quad using average lane luminance.
+        let luminance_x = quad.x * 0.2126 + quad.y * 0.7152 + quad.z * 0.0722;
+        let sample_luminance = (luminance_x.x + luminance_x.y + luminance_x.z + luminance_x.w) * 0.25;
+        let sample_luminance = sample_luminance.max(AUTO_EXPOSURE_EPSILON);
+        let sample_log_luminance = sample_luminance.ln();
+
+        // Update running luminance estimate in log space to avoid upward bias from key / sample_luminance.
+        self.auto_exposure_log_luminance +=
+            (sample_log_luminance - self.auto_exposure_log_luminance) * AUTO_EXPOSURE_HYSTERESIS;
+        let estimated_luminance = self.auto_exposure_log_luminance.exp();
+        let target =
+            (AUTO_EXPOSURE_KEY / estimated_luminance).clamp(AUTO_EXPOSURE_MIN, AUTO_EXPOSURE_MAX);
+        self.auto_exposure_target = target;
+
+        // Keep exposure equal to the log-space estimate; hysteresis is already applied above.
+        self.auto_exposure = self.auto_exposure_target;
+    }
+
+    #[inline]
+    fn random_u32(&mut self) -> u32 {
+        // xorshift64* PRNG.
+        let mut x = self.rng_state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng_state = x;
+        ((x.wrapping_mul(0x2545_F491_4F6C_DD1D)) >> 32) as u32
+    }
+
+    #[inline]
+    fn random_index(&mut self, len: usize) -> usize {
+        debug_assert!(len > 0);
+        (self.random_u32() as usize) % len
+    }
+
     // Copy all tiles pixels to the backbuffer
     pub fn blit_to_buffer(&self, buffer: &mut RenderBuffer) {
         let num_tiles_x = (self.width + TILE_SIZE - 1) / TILE_SIZE;
@@ -275,8 +339,8 @@ impl Renderer {
                         // Read the raw color values for the quad
                         let mut color = tile.color[src_index as usize];
 
-                        // Apply fixed exposure
-                        color *= Vec3x4::splat(2.0);
+                        // Apply auto exposure
+                        color *= Vec3x4::splat(self.auto_exposure);
 
                         // Tonemap to sRGB
                         color = tonemap(color);
