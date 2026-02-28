@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 
 // Size (width and height) of raster tiles in pixels
 const TILE_SIZE: i32 = 64;
+
+// Auto exposure settings
 const DEFAULT_EXPOSURE: f32 = 2.0;
 const AUTO_EXPOSURE_KEY: f32 = 0.18;
-const AUTO_EXPOSURE_HYSTERESIS: f32 = 0.002;
 const AUTO_EXPOSURE_MIN: f32 = 0.05;
 const AUTO_EXPOSURE_MAX: f32 = 32.0;
-const AUTO_EXPOSURE_EPSILON: f32 = 1e-4;
+const AUTO_EXPOSURE_TRIM_FRACTION: f32 = 0.10;
+const AUTO_EXPOSURE_TIME_CONSTANT_SECONDS: f32 = 1.0;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -104,17 +106,18 @@ fn create_screen_tile(
     let height = (screen_max.y - screen_min.y) as usize;
     let width_quads = width / 2;
     let height_quads = height / 2;
-    TileRasterizer {
-        screen_min,
-        screen_max,
-        packets_opaque: BumpQueue::new(pool.clone()),
-        packets_translucent: BumpQueue::new(pool.clone()),
+        TileRasterizer {
+            screen_min,
+            screen_max,
+            packets_opaque: BumpQueue::new(pool.clone()),
+            packets_translucent: BumpQueue::new(pool.clone()),
         color: vec![Vec3x4::ZERO; width_quads * height_quads],
         depth: vec![Vec4::splat(f32::INFINITY); width_quads * height_quads],
-        packet_index: vec![UVec4::ZERO; width_quads * height_quads],
-        bary1: vec![Vec4::ZERO; width_quads * height_quads],
-        bary2: vec![Vec4::ZERO; width_quads * height_quads],
-    }
+            packet_index: vec![UVec4::ZERO; width_quads * height_quads],
+            bary1: vec![Vec4::ZERO; width_quads * height_quads],
+            bary2: vec![Vec4::ZERO; width_quads * height_quads],
+            center_luminance: 1.0,
+        }
 }
 
 #[derive(PartialEq)]
@@ -155,8 +158,7 @@ pub struct Renderer {
     frame_count: u32,
     auto_exposure: f32,
     auto_exposure_target: f32,
-    auto_exposure_log_luminance: f32,
-    rng_state: u64,
+    auto_exposure_ev: f32,
 }
 
 impl Renderer {
@@ -191,8 +193,7 @@ impl Renderer {
             frame_count: 0,
             auto_exposure: DEFAULT_EXPOSURE,
             auto_exposure_target: DEFAULT_EXPOSURE,
-            auto_exposure_log_luminance: (AUTO_EXPOSURE_KEY / DEFAULT_EXPOSURE).ln(),
-            rng_state: 0x6a09e667f3bcc909,
+            auto_exposure_ev: DEFAULT_EXPOSURE.log2(),
         }
     }
 
@@ -254,48 +255,32 @@ impl Renderer {
         self.frame_count += 1;
     }
 
-    pub fn update_auto_exposure(&mut self) {
-        let tile_index = self.random_index(self.tiles.len());
-        let quad_count = self.tiles[tile_index].color.len();
+    pub fn update_auto_exposure(&mut self, delta_time: f32) {
+        let sample_count = self.tiles.len();
+        let mut tile_log_luminance = vec![0.0f32; sample_count];
+        for (sample, tile) in tile_log_luminance.iter_mut().zip(self.tiles.iter()) {
+            *sample = tile.center_luminance.max(1e-4).log2();
+        }
 
-        let quad_index = self.random_index(quad_count);
-        let tile = &self.tiles[tile_index];
-        let quad = tile.color[quad_index];
+        let samples = &mut tile_log_luminance[..];
+        samples.sort_unstable_by(|a, b| a.total_cmp(b));
 
-        // Estimate scene luminance from one stochastic quad using average lane luminance.
-        let luminance_x = quad.x * 0.2126 + quad.y * 0.7152 + quad.z * 0.0722;
-        let sample_luminance =
-            (luminance_x.x + luminance_x.y + luminance_x.z + luminance_x.w) * 0.25;
-        let sample_luminance = sample_luminance.max(AUTO_EXPOSURE_EPSILON);
-        let sample_log_luminance = sample_luminance.ln();
+        let trim_count = ((sample_count as f32) * AUTO_EXPOSURE_TRIM_FRACTION)
+            .floor() as usize;
+        let trim_count = trim_count.min((sample_count - 1) / 2);
+        let trimmed = &samples[trim_count..(sample_count - trim_count)];
+        let mean_log_luminance = trimmed.iter().copied().sum::<f32>() / trimmed.len() as f32;
 
-        // Update running luminance estimate in log space to avoid upward bias from key / sample_luminance.
-        self.auto_exposure_log_luminance +=
-            (sample_log_luminance - self.auto_exposure_log_luminance) * AUTO_EXPOSURE_HYSTERESIS;
-        let estimated_luminance = self.auto_exposure_log_luminance.exp();
+        let target_ev = AUTO_EXPOSURE_KEY.log2() - mean_log_luminance;
         let target =
-            (AUTO_EXPOSURE_KEY / estimated_luminance).clamp(AUTO_EXPOSURE_MIN, AUTO_EXPOSURE_MAX);
+            (2.0f32.powf(target_ev)).clamp(AUTO_EXPOSURE_MIN, AUTO_EXPOSURE_MAX);
         self.auto_exposure_target = target;
 
-        // Keep exposure equal to the log-space estimate; hysteresis is already applied above.
-        self.auto_exposure = self.auto_exposure_target;
-    }
-
-    #[inline]
-    fn random_u32(&mut self) -> u32 {
-        // xorshift64* PRNG.
-        let mut x = self.rng_state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.rng_state = x;
-        ((x.wrapping_mul(0x2545_F491_4F6C_DD1D)) >> 32) as u32
-    }
-
-    #[inline]
-    fn random_index(&mut self, len: usize) -> usize {
-        debug_assert!(len > 0);
-        (self.random_u32() as usize) % len
+        let target_ev = self.auto_exposure_target.log2();
+        let tau = AUTO_EXPOSURE_TIME_CONSTANT_SECONDS.max(1e-4);
+        let alpha = 1.0 - (-(delta_time.max(0.0) / tau)).exp();
+        self.auto_exposure_ev += (target_ev - self.auto_exposure_ev) * alpha;
+        self.auto_exposure = 2.0f32.powf(self.auto_exposure_ev);
     }
 
     // Copy all tiles pixels to the backbuffer

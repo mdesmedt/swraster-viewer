@@ -34,6 +34,7 @@ pub struct TileRasterizer {
     pub packet_index: Vec<UVec4>,
     pub bary1: Vec<Vec4>,
     pub bary2: Vec<Vec4>,
+    pub center_luminance: f32,
 }
 
 struct RasterParams<'a> {
@@ -98,6 +99,11 @@ impl TileRasterizer {
             let packet = self.packets_translucent.get(packet_index);
             self.rasterize_packet(scene, camera, packet_index, &packet, &translucent_shader);
         }
+
+        // Compute center luminance for auto exposure metering
+        let center_quad = self.color[self.color.len() / 2];
+        let luminance_x = center_quad.x * 0.2126 + center_quad.y * 0.7152 + center_quad.z * 0.0722;
+        self.center_luminance = (luminance_x.x + luminance_x.y + luminance_x.z + luminance_x.w) * 0.25;
 
         // Reset the queues
         self.packets_opaque.reset();

@@ -538,7 +538,7 @@ impl App {
                         // Render the scene
                         renderer.render_scene(&render_state.scene, camera);
                         // Update exposure
-                        renderer.update_auto_exposure();
+                        renderer.update_auto_exposure(delta_time);
                         // Blit tiles to the current backbuffer
                         renderer.blit_to_buffer(&mut render_buffer);
                     }
