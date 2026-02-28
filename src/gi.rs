@@ -15,12 +15,13 @@ const SH4_COEFF_COUNT: usize = 4;
 const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 4;
 const RAY_EPSILON: f32 = 1.0e-4;
 const GI_CACHE_MAGIC: [u8; 4] = *b"VGI0";
-const GI_CACHE_VERSION: u32 = 4;
+const GI_CACHE_VERSION: u32 = 5;
 const GI_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
 
-const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 32;
+const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 64;
 const GI_BOUNCE_ALBEDO_SCALE: f32 = 1.0;
 const GI_ACTIVE_DILATION_RADIUS: usize = 2;
+const GI_MIN_BRIGHTNESS: f32 = 0.005;
 
 pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<bool> {
     if !path.exists() {
@@ -356,6 +357,7 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
                 let rgb = irradiance[c].max(Vec3A::ZERO);
                 coeffs_out[c] = Vec4::new(rgb.x, rgb.y, rgb.z, 0.0);
             }
+            apply_min_brightness_floor(coeffs_out, &scene.irradiance_sh);
             coeffs_out[0].w = sun_visibility;
             coeffs_out[1].w = sky_visibility;
 
@@ -563,4 +565,35 @@ fn print_progress(label: &str, done: usize, total: usize, elapsed_sec: f32) {
         elapsed_sec,
         eta_sec
     );
+}
+
+fn apply_min_brightness_floor(
+    coeffs: &mut [Vec4; SH4_COEFF_COUNT],
+    scene_irradiance_sh: &[Vec3A; 4],
+) {
+    let scene_l0 = scene_irradiance_sh[0] * GI_MIN_BRIGHTNESS;
+    let floor_lum = luminance(scene_l0);
+    if floor_lum <= 0.0 {
+        return;
+    }
+
+    let current_l0 = Vec3A::new(coeffs[0].x, coeffs[0].y, coeffs[0].z);
+    let current_lum = luminance(current_l0);
+    if current_lum >= floor_lum {
+        return;
+    }
+
+    let t = ((floor_lum - current_lum) / floor_lum).clamp(0.0, 1.0);
+    for i in 0..SH4_COEFF_COUNT {
+        let current = Vec3A::new(coeffs[i].x, coeffs[i].y, coeffs[i].z);
+        let target = scene_irradiance_sh[i] * GI_MIN_BRIGHTNESS;
+        let blended = current.lerp(target, t);
+        coeffs[i].x = blended.x;
+        coeffs[i].y = blended.y;
+        coeffs[i].z = blended.z;
+    }
+}
+
+fn luminance(c: Vec3A) -> f32 {
+    0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
 }

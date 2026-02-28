@@ -271,7 +271,8 @@ impl Renderer {
 
         // Estimate scene luminance from one stochastic quad using average lane luminance.
         let luminance_x = quad.x * 0.2126 + quad.y * 0.7152 + quad.z * 0.0722;
-        let sample_luminance = (luminance_x.x + luminance_x.y + luminance_x.z + luminance_x.w) * 0.25;
+        let sample_luminance =
+            (luminance_x.x + luminance_x.y + luminance_x.z + luminance_x.w) * 0.25;
         let sample_luminance = sample_luminance.max(AUTO_EXPOSURE_EPSILON);
         let sample_log_luminance = sample_luminance.ln();
 
