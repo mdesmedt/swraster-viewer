@@ -2,9 +2,19 @@ use crate::math::*;
 use crate::util::*;
 use dashmap::DashMap;
 use glam::{UVec4, Vec2, Vec3A, Vec4};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use crate::scene::{SceneError, SceneResult};
+
+const GGX_CACHE_MAGIC: [u8; 4] = *b"GGX0";
+const GGX_CACHE_VERSION: u32 = 1;
+const GGX_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
+const GGX_CACHE_BROTLI_BUFFER_SIZE: usize = 64 * 1024;
+const GGX_CACHE_BROTLI_QUALITY: u32 = 6;
+const GGX_CACHE_BROTLI_LGWIN: u32 = 22;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum TextureType {
@@ -335,8 +345,10 @@ pub fn generate_prefiltered_specular_cubemap(
     let mut array_stride = Vec::with_capacity(num_mips as usize);
 
     for mip in 0..num_mips {
-        let mip_width = (base_width >> mip).max(1);
-        let mip_height = (base_height >> mip).max(1);
+        // Keep all prefiltered mips at full face resolution. Roughness progression still
+        // comes from the GGX integration below (one roughness value per mip level).
+        let mip_width = base_width;
+        let mip_height = base_height;
         let roughness = if max_mip > 0 {
             mip as f32 / max_mip as f32
         } else {
@@ -405,6 +417,138 @@ pub fn generate_prefiltered_specular_cubemap(
         mip_heights_f,
         array_stride,
     }
+}
+
+fn expected_prefiltered_cubemap_texel_count(width: u32, height: u32, num_mips: u32) -> usize {
+    (width as usize) * (height as usize) * 6 * (num_mips as usize)
+}
+
+pub fn try_load_prefiltered_specular_cubemap_cache(
+    path: &Path,
+    expected_width: u32,
+    expected_height: u32,
+) -> io::Result<Option<Texture>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let bytes = fs::read(path)?;
+    if bytes.len() < GGX_CACHE_HEADER_BYTES {
+        return Ok(None);
+    }
+    if bytes[0..4] != GGX_CACHE_MAGIC {
+        return Ok(None);
+    }
+
+    let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    if version != GGX_CACHE_VERSION {
+        return Ok(None);
+    }
+
+    let file_width = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let file_height = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    let file_num_mips = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let expected_num_mips = 1 + (expected_width.max(expected_height)).ilog2();
+    if file_width != expected_width
+        || file_height != expected_height
+        || file_num_mips != expected_num_mips
+    {
+        return Ok(None);
+    }
+
+    let expected_texel_count =
+        expected_prefiltered_cubemap_texel_count(file_width, file_height, file_num_mips);
+    let expected_payload_bytes = expected_texel_count * std::mem::size_of::<u32>();
+
+    let mut payload = Vec::with_capacity(expected_payload_bytes);
+    let mut decompressor =
+        brotli::Decompressor::new(&bytes[GGX_CACHE_HEADER_BYTES..], GGX_CACHE_BROTLI_BUFFER_SIZE);
+    decompressor.read_to_end(&mut payload)?;
+    if payload.len() != expected_payload_bytes {
+        return Ok(None);
+    }
+
+    let mut data = Vec::with_capacity(expected_texel_count);
+    for chunk in payload.chunks_exact(4) {
+        data.push(u32::from_le_bytes(chunk.try_into().unwrap()));
+    }
+
+    let face_texels = file_width * file_height;
+    let mut mip_offsets = Vec::with_capacity(file_num_mips as usize);
+    let mut mip_widths = Vec::with_capacity(file_num_mips as usize);
+    let mut mip_heights = Vec::with_capacity(file_num_mips as usize);
+    let mut mip_widths_f = Vec::with_capacity(file_num_mips as usize);
+    let mut mip_heights_f = Vec::with_capacity(file_num_mips as usize);
+    let mut array_stride = Vec::with_capacity(file_num_mips as usize);
+    let mut offset = 0u32;
+    for _ in 0..file_num_mips {
+        mip_offsets.push(offset);
+        mip_widths.push(file_width);
+        mip_heights.push(file_height);
+        mip_widths_f.push(file_width as f32);
+        mip_heights_f.push(file_height as f32);
+        array_stride.push(face_texels);
+        offset += face_texels * 6;
+    }
+
+    Ok(Some(Texture {
+        width: file_width,
+        height: file_height,
+        width_height_vec: Vec4::new(
+            file_width as f32,
+            file_width as f32,
+            file_height as f32,
+            file_height as f32,
+        ),
+        texture_type: TextureType::Linear,
+        data,
+        max_mip_level: file_num_mips - 1,
+        max_mip_level_vec: Vec4::splat((file_num_mips - 1) as f32),
+        mip_offsets,
+        mip_widths,
+        mip_heights,
+        mip_widths_f,
+        mip_heights_f,
+        array_stride,
+    }))
+}
+
+pub fn save_prefiltered_specular_cubemap_cache(path: &Path, texture: &Texture) -> io::Result<()> {
+    let num_mips = texture.max_mip_level + 1;
+    let expected_texel_count =
+        expected_prefiltered_cubemap_texel_count(texture.width, texture.height, num_mips);
+    if texture.data.len() != expected_texel_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "prefiltered cubemap texture has unexpected data size",
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(GGX_CACHE_HEADER_BYTES);
+    bytes.extend_from_slice(&GGX_CACHE_MAGIC);
+    bytes.extend_from_slice(&GGX_CACHE_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&texture.width.to_le_bytes());
+    bytes.extend_from_slice(&texture.height.to_le_bytes());
+    bytes.extend_from_slice(&num_mips.to_le_bytes());
+
+    let mut payload = Vec::with_capacity(expected_texel_count * std::mem::size_of::<u32>());
+    for texel in &texture.data {
+        payload.extend_from_slice(&texel.to_le_bytes());
+    }
+
+    let mut compressed_payload = Vec::new();
+    {
+        let mut compressor = brotli::CompressorWriter::new(
+            &mut compressed_payload,
+            GGX_CACHE_BROTLI_BUFFER_SIZE,
+            GGX_CACHE_BROTLI_QUALITY,
+            GGX_CACHE_BROTLI_LGWIN,
+        );
+        compressor.write_all(&payload)?;
+        compressor.flush()?;
+    }
+    bytes.extend_from_slice(&compressed_payload);
+    fs::write(path, bytes)
 }
 
 pub enum WrapMode {
@@ -501,8 +645,7 @@ impl TextureAndSampler {
 
     pub fn sample_cubemap_rgb(&self, normal: Vec3x4, mip_level: UVec4) -> Vec3x4 {
         let (u, v, array_slice) = Self::cubemap_uv_from_normal(normal);
-
-        assert!(mip_level.x < 20);
+        let mip_level = mip_level.min(UVec4::splat(self.texture.max_mip_level));
 
         let width_i = self.texture.mip_widths.gather(mip_level);
         let width_f = self.texture.mip_widths_f.gather(mip_level);

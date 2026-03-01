@@ -26,3 +26,5 @@ glTF-Sample-Assets/
 .devenv
 .pre-commit-config.yaml
 .devenv.flake.nix
+models
+assets/cubemap.ggx

@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::texture::*;
@@ -160,8 +161,54 @@ impl Scene {
             texture: cubemap_texture.clone(),
             sampler: cubemap_sampler,
         };
+        let cubemap_ggx_cache_path = Path::new("assets/cubemap.ggx");
+        let cubemap_specular_texture = match try_load_prefiltered_specular_cubemap_cache(
+            cubemap_ggx_cache_path,
+            cubemap.texture.width,
+            cubemap.texture.height,
+        ) {
+            Ok(Some(texture)) => {
+                println!("Loaded GGX cubemap cache: {}", cubemap_ggx_cache_path.display());
+                Arc::new(texture)
+            }
+            Ok(None) => {
+                println!(
+                    "Building GGX cubemap cache: {}",
+                    cubemap_ggx_cache_path.display()
+                );
+                let texture = generate_prefiltered_specular_cubemap(&cubemap, 64);
+                if let Err(err) =
+                    save_prefiltered_specular_cubemap_cache(cubemap_ggx_cache_path, &texture)
+                {
+                    eprintln!(
+                        "Failed to write GGX cubemap cache {}: {}",
+                        cubemap_ggx_cache_path.display(),
+                        err
+                    );
+                }
+                Arc::new(texture)
+            }
+            Err(err) => {
+                eprintln!(
+                    "Failed to read GGX cubemap cache {} (recomputing): {}",
+                    cubemap_ggx_cache_path.display(),
+                    err
+                );
+                let texture = generate_prefiltered_specular_cubemap(&cubemap, 64);
+                if let Err(write_err) =
+                    save_prefiltered_specular_cubemap_cache(cubemap_ggx_cache_path, &texture)
+                {
+                    eprintln!(
+                        "Failed to write GGX cubemap cache {}: {}",
+                        cubemap_ggx_cache_path.display(),
+                        write_err
+                    );
+                }
+                Arc::new(texture)
+            }
+        };
         let cubemap_specular = TextureAndSampler {
-            texture: Arc::new(generate_prefiltered_specular_cubemap(&cubemap, 64)),
+            texture: cubemap_specular_texture,
             sampler: Sampler {
                 wrap_s: WrapMode::ClampToEdge,
                 wrap_t: WrapMode::ClampToEdge,
