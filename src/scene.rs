@@ -187,8 +187,8 @@ impl Scene {
             cameras: Vec::new(),
             bounds: SceneBounds::new_empty(),
             light: Light {
-                direction: Vec3A::new(-0.2, 1.0, 0.5).normalize(),
-                color: Vec3A::new(1.0, 1.0, 0.95),
+                direction: Vec3A::new(-0.2, 1.0, 0.3).normalize(),
+                color: Vec3A::new(1.0, 1.0, 0.95) * 5.0,
             },
             voxel_grid: crate::voxelgrid::VoxelGrid::new(1, 1, 1, Vec3A::ZERO, Vec3A::ONE),
             cubemap,

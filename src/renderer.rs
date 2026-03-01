@@ -15,7 +15,7 @@ const TILE_SIZE: i32 = 64;
 
 // Auto exposure settings
 const DEFAULT_EXPOSURE: f32 = 2.0;
-const AUTO_EXPOSURE_KEY: f32 = 0.18;
+const AUTO_EXPOSURE_MID_GRAY_POST_TONEMAP: f32 = 0.45;
 const AUTO_EXPOSURE_MIN: f32 = 0.05;
 const AUTO_EXPOSURE_MAX: f32 = 32.0;
 const AUTO_EXPOSURE_TRIM_FRACTION: f32 = 0.10;
@@ -257,6 +257,10 @@ impl Renderer {
 
     pub fn update_auto_exposure(&mut self, delta_time: f32) {
         let sample_count = self.tiles.len();
+        if sample_count == 0 {
+            return;
+        }
+
         let mut tile_log_luminance = vec![0.0f32; sample_count];
         for (sample, tile) in tile_log_luminance.iter_mut().zip(self.tiles.iter()) {
             *sample = tile.center_luminance.max(1e-4).log2();
@@ -271,7 +275,9 @@ impl Renderer {
         let trimmed = &samples[trim_count..(sample_count - trim_count)];
         let mean_log_luminance = trimmed.iter().copied().sum::<f32>() / trimmed.len() as f32;
 
-        let target_ev = AUTO_EXPOSURE_KEY.log2() - mean_log_luminance;
+        // Meter against a target in post-tonemap space to better match perceived brightness.
+        let meter_key = tonemap_inverse_scalar(AUTO_EXPOSURE_MID_GRAY_POST_TONEMAP).max(1e-4);
+        let target_ev = meter_key.log2() - mean_log_luminance;
         let target =
             (2.0f32.powf(target_ev)).clamp(AUTO_EXPOSURE_MIN, AUTO_EXPOSURE_MAX);
         self.auto_exposure_target = target;

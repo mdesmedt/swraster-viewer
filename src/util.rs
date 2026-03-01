@@ -1,6 +1,8 @@
 use crate::math::*;
 use glam::{BVec4, BVec4A, UVec4, Vec3A, Vec4};
 
+pub const TONEMAP_K: f32 = 0.2;
+
 pub fn bvec4_to_bvec4a(b: BVec4) -> BVec4A {
     let arr: [bool; 4] = b.into();
     BVec4A::from(arr)
@@ -34,8 +36,14 @@ pub fn tonemap_aces(color: Vec3x4) -> Vec3x4 {
 
 pub fn tonemap(color: Vec3x4) -> Vec3x4 {
     // Contrast control
-    let k = 0.2;
+    let k = TONEMAP_K;
     color / (color + k) * (1.0 + k)
+}
+
+pub fn tonemap_inverse_scalar(mapped: f32) -> f32 {
+    let y = mapped.clamp(0.0, 1.0);
+    let denom = (1.0 + TONEMAP_K - y).max(1e-6);
+    (y * TONEMAP_K) / denom
 }
 
 pub fn srgb_to_linear_scalar(scalar: f32) -> f32 {
