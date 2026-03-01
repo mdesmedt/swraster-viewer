@@ -6,7 +6,7 @@ use glam::{UVec4, Vec3A, Vec4};
 use rayon::prelude::*;
 use std::f32::consts::PI;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -15,8 +15,11 @@ const SH4_COEFF_COUNT: usize = 4;
 const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 4;
 const RAY_EPSILON: f32 = 1.0e-4;
 const GI_CACHE_MAGIC: [u8; 4] = *b"VGI0";
-const GI_CACHE_VERSION: u32 = 6;
+const GI_CACHE_VERSION: u32 = 7;
 const GI_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
+const GI_CACHE_BROTLI_BUFFER_SIZE: usize = 64 * 1024;
+const GI_CACHE_BROTLI_QUALITY: u32 = 6;
+const GI_CACHE_BROTLI_LGWIN: u32 = 22;
 
 const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 64;
 const GI_PRIMARY_DIRECTION_SET_COUNT: usize = 9;
@@ -29,9 +32,8 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
         return Ok(false);
     }
 
-    let expected_size = expected_gi_bytes(voxel_grid);
     let bytes = fs::read(path)?;
-    if bytes.len() != expected_size {
+    if bytes.len() < GI_CACHE_HEADER_BYTES {
         return Ok(false);
     }
 
@@ -50,17 +52,26 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
         return Ok(false);
     }
 
+    let expected_payload_size = expected_gi_payload_bytes(voxel_grid);
+    let mut payload = Vec::with_capacity(expected_payload_size);
+    let mut decompressor =
+        brotli::Decompressor::new(&bytes[GI_CACHE_HEADER_BYTES..], GI_CACHE_BROTLI_BUFFER_SIZE);
+    decompressor.read_to_end(&mut payload)?;
+    if payload.len() != expected_payload_size {
+        return Ok(false);
+    }
+
     let mut coeffs = vec![[Vec4::ZERO; SH4_COEFF_COUNT]; voxel_grid.voxel_count()];
-    let mut byte_index = GI_CACHE_HEADER_BYTES;
+    let mut byte_index = 0;
     for voxel_coeffs in &mut coeffs {
         for coeff in voxel_coeffs.iter_mut().take(SH4_COEFF_COUNT) {
-            let r = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
+            let r = f32::from_le_bytes(payload[byte_index..byte_index + 4].try_into().unwrap());
             byte_index += 4;
-            let g = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
+            let g = f32::from_le_bytes(payload[byte_index..byte_index + 4].try_into().unwrap());
             byte_index += 4;
-            let b = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
+            let b = f32::from_le_bytes(payload[byte_index..byte_index + 4].try_into().unwrap());
             byte_index += 4;
-            let w = f32::from_le_bytes(bytes[byte_index..byte_index + 4].try_into().unwrap());
+            let w = f32::from_le_bytes(payload[byte_index..byte_index + 4].try_into().unwrap());
             byte_index += 4;
             *coeff = Vec4::new(r, g, b, w);
         }
@@ -72,26 +83,37 @@ pub fn try_load_gi_cache(path: &Path, voxel_grid: &mut VoxelGrid) -> io::Result<
 
 pub fn save_gi_cache(path: &Path, voxel_grid: &VoxelGrid) -> io::Result<()> {
     let gi_data = voxel_grid.gi_sh4();
-    let mut bytes = Vec::with_capacity(expected_gi_bytes(voxel_grid));
+    let mut bytes = Vec::with_capacity(GI_CACHE_HEADER_BYTES);
     bytes.extend_from_slice(&GI_CACHE_MAGIC);
     bytes.extend_from_slice(&GI_CACHE_VERSION.to_le_bytes());
     let (w, h, d) = voxel_grid.dimensions();
     bytes.extend_from_slice(&(w as u32).to_le_bytes());
     bytes.extend_from_slice(&(h as u32).to_le_bytes());
     bytes.extend_from_slice(&(d as u32).to_le_bytes());
+
+    let mut payload = Vec::with_capacity(expected_gi_payload_bytes(voxel_grid));
     for voxel_coeffs in gi_data {
         for coeff in voxel_coeffs {
-            bytes.extend_from_slice(&coeff.x.to_le_bytes());
-            bytes.extend_from_slice(&coeff.y.to_le_bytes());
-            bytes.extend_from_slice(&coeff.z.to_le_bytes());
-            bytes.extend_from_slice(&coeff.w.to_le_bytes());
+            payload.extend_from_slice(&coeff.x.to_le_bytes());
+            payload.extend_from_slice(&coeff.y.to_le_bytes());
+            payload.extend_from_slice(&coeff.z.to_le_bytes());
+            payload.extend_from_slice(&coeff.w.to_le_bytes());
         }
     }
-    fs::write(path, bytes)
-}
 
-pub fn expected_gi_bytes(voxel_grid: &VoxelGrid) -> usize {
-    GI_CACHE_HEADER_BYTES + expected_gi_payload_bytes(voxel_grid)
+    let mut compressed_payload = Vec::new();
+    {
+        let mut compressor = brotli::CompressorWriter::new(
+            &mut compressed_payload,
+            GI_CACHE_BROTLI_BUFFER_SIZE,
+            GI_CACHE_BROTLI_QUALITY,
+            GI_CACHE_BROTLI_LGWIN,
+        );
+        compressor.write_all(&payload)?;
+        compressor.flush()?;
+    }
+    bytes.extend_from_slice(&compressed_payload);
+    fs::write(path, bytes)
 }
 
 fn expected_gi_payload_bytes(voxel_grid: &VoxelGrid) -> usize {
