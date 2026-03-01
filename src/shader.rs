@@ -282,11 +282,13 @@ pub fn pbr_shader<const TRANSLUCENT: bool>(shading_params: PbrShaderParams) -> V
             + color_indirect_specular
     };
 
-    // Sample and add emissive texture if provided
-    if let Some(emissive_texture) = &material.emissive_texture {
-        let emissive_mat = srgb_to_linear_fast(emissive_texture.sample4_rgb(uv_x, uv_y, du_dv));
-        color += emissive_mat * material.emissive_factor;
-    }
+    // glTF emissive = emissiveFactor * emissiveTexture (or 1 if texture is absent).
+    let emissive_mat = if let Some(emissive_texture) = &material.emissive_texture {
+        srgb_to_linear_fast(emissive_texture.sample4_rgb(uv_x, uv_y, du_dv))
+    } else {
+        Vec3x4::ONE
+    };
+    color += emissive_mat * material.emissive_factor;
 
     // Debug: Show world space position
     //color = pos_world;

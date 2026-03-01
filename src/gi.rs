@@ -15,7 +15,7 @@ const SH4_COEFF_COUNT: usize = 4;
 const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 4;
 const RAY_EPSILON: f32 = 1.0e-4;
 const GI_CACHE_MAGIC: [u8; 4] = *b"VGI0";
-const GI_CACHE_VERSION: u32 = 7;
+const GI_CACHE_VERSION: u32 = 8;
 const GI_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
 const GI_CACHE_BROTLI_BUFFER_SIZE: usize = 64 * 1024;
 const GI_CACHE_BROTLI_QUALITY: u32 = 6;
@@ -481,6 +481,22 @@ fn estimate_surface_bounce_radiance(
         normal = -normal;
     }
 
+    // glTF emissive = emissiveFactor * emissiveTexture (or 1 if texture is absent).
+    let mut emissive = material.emissive_factor;
+    if let Some(emissive_texture) = &material.emissive_texture {
+        let uv = hit.uv(tri);
+        let tex = emissive_texture
+            .sample_bilinear_rgb(Vec4::splat(uv.x), Vec4::splat(uv.y), 0, UVec4::ZERO)
+            .extract_lane(0);
+        let tex_linear = Vec3A::new(
+            srgb_to_linear_scalar(tex.x),
+            srgb_to_linear_scalar(tex.y),
+            srgb_to_linear_scalar(tex.z),
+        );
+        emissive *= tex_linear;
+    }
+    emissive = emissive.max(Vec3A::ZERO);
+
     let mut albedo = Vec3A::new(
         material.base_color_factor.x,
         material.base_color_factor.y,
@@ -499,7 +515,7 @@ fn estimate_surface_bounce_radiance(
         albedo *= tex_linear;
     }
     albedo = albedo.clamp(Vec3A::ZERO, Vec3A::ONE) * GI_BOUNCE_ALBEDO_SCALE;
-    if albedo.length_squared() <= 0.0 {
+    if albedo.length_squared() <= 0.0 && emissive.length_squared() <= 0.0 {
         return Vec3A::ZERO;
     }
 
@@ -520,11 +536,13 @@ fn estimate_surface_bounce_radiance(
         sky_visibility_hemisphere4(raytracer, scene, shading_origin, normal, dir_bias, t_min);
     let e_sky = eval_sh4_irradiance(&scene.irradiance_sh, normal).max(Vec3A::ZERO) * sky_vis;
     let e_total = (e_sun + e_sky).max(Vec3A::ZERO);
-    if e_total.length_squared() <= 0.0 {
-        return Vec3A::ZERO;
-    }
+    let bounce = if e_total.length_squared() > 0.0 {
+        albedo * (e_total / PI)
+    } else {
+        Vec3A::ZERO
+    };
 
-    albedo * (e_total / PI)
+    bounce + emissive
 }
 
 fn sky_visibility_hemisphere4(
