@@ -15,10 +15,11 @@ const SH4_COEFF_COUNT: usize = 4;
 const SH4_FLOATS_PER_VOXEL: usize = SH4_COEFF_COUNT * 4;
 const RAY_EPSILON: f32 = 1.0e-4;
 const GI_CACHE_MAGIC: [u8; 4] = *b"VGI0";
-const GI_CACHE_VERSION: u32 = 5;
+const GI_CACHE_VERSION: u32 = 6;
 const GI_CACHE_HEADER_BYTES: usize = 4 + 4 + 4 + 4 + 4;
 
 const GI_PRIMARY_SAMPLES_PER_VOXEL: u32 = 64;
+const GI_PRIMARY_DIRECTION_SET_COUNT: usize = 9;
 const GI_BOUNCE_ALBEDO_SCALE: f32 = 1.0;
 const GI_ACTIVE_DILATION_RADIUS: usize = 2;
 const GI_MIN_BRIGHTNESS: f32 = 0.005;
@@ -303,9 +304,9 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
         .as_ref()
         .map(|mask| mask.iter().filter(|&&v| v).count())
         .unwrap_or(total);
-    let primary_dirs = build_uniform_sphere_samples(GI_PRIMARY_SAMPLES_PER_VOXEL);
-
-    let primary_weight = (4.0 * PI) / (primary_dirs.len() as f32);
+    let primary_dirs_sets =
+        build_direction_sets(GI_PRIMARY_SAMPLES_PER_VOXEL, GI_PRIMARY_DIRECTION_SET_COUNT);
+    let primary_weight = (4.0 * PI) / (GI_PRIMARY_SAMPLES_PER_VOXEL as f32);
     let primary_bias = (voxel_size.length() * 0.35).max(RAY_EPSILON * 4.0);
     let hit_bias = (voxel_size.length() * 0.05).max(RAY_EPSILON * 8.0);
     let gi_tmin = (min_voxel_edge * 0.15).max(RAY_EPSILON);
@@ -335,10 +336,12 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
             let x = rem % width;
             let voxel_center = center_min + Vec3A::new(x as f32, y as f32, z as f32) * voxel_size;
             let sun_visibility = voxel_grid.get_light_intensity(x, y, z);
+            let set_index = ((x % 3) + 3 * (y % 3) + (z % 3)) % GI_PRIMARY_DIRECTION_SET_COUNT;
+            let primary_dirs = &primary_dirs_sets[set_index];
 
             let mut radiance_sh = [Vec3A::ZERO; SH4_COEFF_COUNT];
             let mut sky_hit_count = 0u32;
-            for dir in &primary_dirs {
+            for dir in primary_dirs {
                 let ray_origin = voxel_center + *dir * primary_bias;
                 let incident_radiance = if let Some(hit) =
                     raytracer.trace_nearest(ray_origin, *dir, gi_tmin, f32::INFINITY)
@@ -382,10 +385,25 @@ pub fn bake_voxel_gi(raytracer: &RayTracer, scene: &Scene, voxel_grid: &mut Voxe
     voxel_grid.blur_gi_sh4();
 }
 
-fn build_uniform_sphere_samples(sample_count: u32) -> Vec<Vec3A> {
+fn build_direction_sets(sample_count: u32, set_count: usize) -> Vec<Vec<Vec3A>> {
+    let mut sets = Vec::with_capacity(set_count);
+    for set_index in 0..set_count {
+        sets.push(build_uniform_sphere_samples(sample_count, set_index as u32, set_count as u32));
+    }
+    sets
+}
+
+fn build_uniform_sphere_samples(sample_count: u32, set_index: u32, set_count: u32) -> Vec<Vec3A> {
     let mut dirs = Vec::with_capacity(sample_count as usize);
+    // Use a Cranley-Patterson rotation so each set is uniformly distributed but distinct.
+    let set_offset = glam::Vec2::new(
+        radical_inverse_vdc(set_index + 1),
+        ((set_index as f32) + 0.5) / (set_count as f32),
+    );
     for i in 0..sample_count {
-        let xi = hammersley(i, sample_count);
+        let mut xi = hammersley(i, sample_count) + set_offset;
+        xi.x = xi.x.fract();
+        xi.y = xi.y.fract();
         let z = 1.0 - 2.0 * xi.x;
         let r = (1.0 - z * z).max(0.0).sqrt();
         let phi = 2.0 * PI * xi.y;
