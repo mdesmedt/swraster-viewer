@@ -76,11 +76,16 @@ impl RenderCamera {
     }
 
     pub fn update_matrices(&mut self) {
+        self.update_matrices_with_jitter(Vec2::ZERO);
+    }
+
+    pub fn update_matrices_with_jitter(&mut self, jitter_pixels: Vec2) {
         self.view_matrix = self.compute_view_matrix();
-        self.projection_matrix = self.compute_projection_matrix();
+        self.projection_matrix = self.compute_projection_matrix(jitter_pixels);
         self.view_project_matrix = self.projection_matrix * self.view_matrix;
         self.inverse_view_project_matrix = self.view_project_matrix.inverse();
-        self.skybox_matrix_transposed = self.compute_skybox_matrix_transposed();
+        self.skybox_matrix_transposed =
+            self.compute_skybox_matrix_transposed(self.projection_matrix);
         self.view_clip_planes = self.compute_view_clip_planes();
         self.view_normal = self.get_rotation().conjugate() * Vec3A::new(0.0, 0.0, 1.0);
     }
@@ -95,13 +100,25 @@ impl RenderCamera {
         rotation_matrix * translation_matrix
     }
 
-    fn compute_projection_matrix(&self) -> Mat4 {
-        Mat4::perspective_rh(self.fov, self.width / self.height, self.near, self.far)
+    fn compute_projection_matrix(&self, jitter_pixels: Vec2) -> Mat4 {
+        let mut projection =
+            Mat4::perspective_rh(self.fov, self.width / self.height, self.near, self.far);
+
+        if jitter_pixels != Vec2::ZERO {
+            // Translate the projection center by a subpixel offset for temporal supersampling.
+            let jitter_ndc = Vec2::new(
+                jitter_pixels.x * 2.0 * self.one_over_width,
+                jitter_pixels.y * 2.0 * self.one_over_height,
+            );
+            projection.z_axis.x -= jitter_ndc.x;
+            projection.z_axis.y -= jitter_ndc.y;
+        }
+
+        projection
     }
 
-    fn compute_skybox_matrix_transposed(&self) -> Mat4 {
+    fn compute_skybox_matrix_transposed(&self, projection_matrix: Mat4) -> Mat4 {
         let rotation_matrix: Mat4 = Mat4::from_quat(self.get_rotation());
-        let projection_matrix = self.compute_projection_matrix();
         let viewproj = projection_matrix * rotation_matrix;
         return viewproj.inverse().transpose();
     }

@@ -514,9 +514,6 @@ impl App {
                 camera.rotate_mouse(delta * ROTATION_FACTOR);
                 self.input_state.mouse_delta = Vec2::ZERO;
             }
-
-            // Update camera matrices
-            camera.update_matrices();
         }
 
         let backbuffer_index = self.backbuffer_index;
@@ -598,6 +595,14 @@ impl App {
 
         // Swap backbuffers
         self.backbuffer_index = 1 - self.backbuffer_index;
+
+        let render_paused = self.renderer.lock().unwrap().is_render_paused();
+        if render_paused {
+            // Freeze FPS counter while temporal accumulation is converged.
+            self.frame_count = 0;
+            self.last_fps_update = current_time;
+            return;
+        }
 
         // Update FPS counter
         self.frame_count += 1;

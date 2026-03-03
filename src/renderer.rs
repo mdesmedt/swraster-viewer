@@ -4,7 +4,7 @@ use crate::rendercamera::RenderCamera;
 use crate::scene::{BoundingSphere, Node, Primitive, Scene};
 use crate::tilerasterizer::*;
 use crate::util::*;
-use glam::{IVec2, Mat3A, Mat4, UVec4, Vec2, Vec3A, Vec4};
+use glam::{IVec2, Mat3A, Mat4, Quat, UVec4, Vec2, Vec3A, Vec4};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -20,6 +20,9 @@ const AUTO_EXPOSURE_MIN: f32 = 0.05;
 const AUTO_EXPOSURE_MAX: f32 = 32.0;
 const AUTO_EXPOSURE_TRIM_FRACTION: f32 = 0.10;
 const AUTO_EXPOSURE_TIME_CONSTANT_SECONDS: f32 = 1.0;
+
+// Temporal supersampling settings
+const TEMPORAL_SS_MAX_SAMPLES: u32 = 32;
 
 pub struct RenderBuffer<'a> {
     pub width: usize,
@@ -106,18 +109,19 @@ fn create_screen_tile(
     let height = (screen_max.y - screen_min.y) as usize;
     let width_quads = width / 2;
     let height_quads = height / 2;
-        TileRasterizer {
-            screen_min,
-            screen_max,
-            packets_opaque: BumpQueue::new(pool.clone()),
-            packets_translucent: BumpQueue::new(pool.clone()),
+    TileRasterizer {
+        screen_min,
+        screen_max,
+        packets_opaque: BumpQueue::new(pool.clone()),
+        packets_translucent: BumpQueue::new(pool.clone()),
         color: vec![Vec3x4::ZERO; width_quads * height_quads],
+        temporal_color: vec![Vec3x4::ZERO; width_quads * height_quads],
         depth: vec![Vec4::splat(f32::INFINITY); width_quads * height_quads],
-            packet_index: vec![UVec4::ZERO; width_quads * height_quads],
-            bary1: vec![Vec4::ZERO; width_quads * height_quads],
-            bary2: vec![Vec4::ZERO; width_quads * height_quads],
-            center_luminance: 1.0,
-        }
+        packet_index: vec![UVec4::ZERO; width_quads * height_quads],
+        bary1: vec![Vec4::ZERO; width_quads * height_quads],
+        bary2: vec![Vec4::ZERO; width_quads * height_quads],
+        center_luminance: 1.0,
+    }
 }
 
 #[derive(PartialEq)]
@@ -159,6 +163,11 @@ pub struct Renderer {
     auto_exposure: f32,
     auto_exposure_target: f32,
     auto_exposure_ev: f32,
+    temporal_sample_count: u32,
+    temporal_jitter_index: u32,
+    has_previous_camera_state: bool,
+    previous_camera_position: Vec3A,
+    previous_camera_rotation: Quat,
 }
 
 impl Renderer {
@@ -194,11 +203,60 @@ impl Renderer {
             auto_exposure: DEFAULT_EXPOSURE,
             auto_exposure_target: DEFAULT_EXPOSURE,
             auto_exposure_ev: DEFAULT_EXPOSURE.log2(),
+            temporal_sample_count: 0,
+            temporal_jitter_index: 0,
+            has_previous_camera_state: false,
+            previous_camera_position: Vec3A::ZERO,
+            previous_camera_rotation: Quat::IDENTITY,
         }
     }
 
     // Main render function for the scene
-    pub fn render_scene(&mut self, scene: &Scene, camera: &RenderCamera) {
+    pub fn render_scene(&mut self, scene: &Scene, camera: &mut RenderCamera) {
+        const CAMERA_POSITION_EPSILON_SQ: f32 = 1e-10;
+        const CAMERA_ROTATION_DOT_EPSILON: f32 = 1e-6;
+
+        let camera_rotation = camera.get_rotation();
+        let camera_moved = if self.has_previous_camera_state {
+            let position_delta = camera.position - self.previous_camera_position;
+            let position_moved = position_delta.length_squared() > CAMERA_POSITION_EPSILON_SQ;
+            let rotation_dot = camera_rotation.dot(self.previous_camera_rotation).abs();
+            let rotation_moved = rotation_dot < (1.0 - CAMERA_ROTATION_DOT_EPSILON);
+            position_moved || rotation_moved
+        } else {
+            true
+        };
+
+        self.has_previous_camera_state = true;
+        self.previous_camera_position = camera.position;
+        self.previous_camera_rotation = camera_rotation;
+
+        if camera_moved {
+            self.reset_temporal_accumulation();
+            camera.update_matrices();
+            self.render_scene_sample(scene, camera);
+            return;
+        }
+
+        if self.is_render_paused() {
+            return;
+        }
+
+        let jitter = if self.temporal_sample_count == 0 {
+            Vec2::ZERO
+        } else {
+            Self::temporal_jitter_pixels(self.temporal_jitter_index)
+        };
+        camera.update_matrices_with_jitter(jitter);
+        self.render_scene_sample(scene, camera);
+        self.accumulate_temporal_sample();
+    }
+
+    pub fn is_render_paused(&self) -> bool {
+        self.temporal_sample_count >= TEMPORAL_SS_MAX_SAMPLES
+    }
+
+    fn render_scene_sample(&mut self, scene: &Scene, camera: &RenderCamera) {
         // Compute nodes by distance, front to back
         self.compute_nodes_by_distance(scene, camera);
 
@@ -219,24 +277,6 @@ impl Renderer {
         let rasterizer_time = rasterizer_start.elapsed();
         self.timer_rasterizer += rasterizer_time;
 
-        // Stutter detection (2x the average)
-        if self.frame_count > 0 {
-            let clipbin_avg = self.timer_clipbin.as_secs_f64() / self.frame_count as f64;
-            let rasterizer_avg = self.timer_rasterizer.as_secs_f64() / self.frame_count as f64;
-            if clipbin_time > Duration::from_secs_f64(clipbin_avg * 2.0) {
-                println!(
-                    "Clipping stutter: {:.2}ms",
-                    clipbin_time.as_secs_f64() * 1000.0
-                );
-            }
-            if rasterizer_time > Duration::from_secs_f64(rasterizer_avg * 2.0) {
-                println!(
-                    "Rasterization stutter: {:.2}ms",
-                    rasterizer_time.as_secs_f64() * 1000.0
-                );
-            }
-        }
-
         let now = Instant::now();
         if now.duration_since(self.last_print_time) >= Duration::from_secs(1) {
             let clipbin_avg = self.timer_clipbin.as_secs_f64() / self.frame_count as f64;
@@ -253,6 +293,56 @@ impl Renderer {
             self.timer_rasterizer = Duration::ZERO;
         }
         self.frame_count += 1;
+    }
+
+    fn reset_temporal_accumulation(&mut self) {
+        self.temporal_sample_count = 0;
+        self.temporal_jitter_index = 0;
+    }
+
+    fn halton(index: u32, base: u32) -> f32 {
+        let mut f = 1.0f32;
+        let mut r = 0.0f32;
+        let mut i = index;
+        let base_f = base as f32;
+        while i > 0 {
+            f /= base_f;
+            r += f * (i % base) as f32;
+            i /= base;
+        }
+        r
+    }
+
+    fn temporal_jitter_pixels(index: u32) -> Vec2 {
+        // Start from index 1 so we avoid the all-zero Halton sample.
+        let sequence_index = (index % 1024) + 1;
+        Vec2::new(
+            Self::halton(sequence_index, 2) - 0.5,
+            Self::halton(sequence_index, 3) - 0.5,
+        )
+    }
+
+    fn accumulate_temporal_sample(&mut self) {
+        let prev_sample_count = self.temporal_sample_count.min(TEMPORAL_SS_MAX_SAMPLES);
+        let next_sample_count = (prev_sample_count + 1).min(TEMPORAL_SS_MAX_SAMPLES);
+        let blend_new = 1.0 / next_sample_count as f32;
+        let blend_old = 1.0 - blend_new;
+        let blend_new_vec = Vec4::splat(blend_new);
+        let blend_old_vec = Vec4::splat(blend_old);
+
+        self.tiles.par_iter_mut().for_each(|tile| {
+            for (accum, current) in tile.temporal_color.iter_mut().zip(tile.color.iter_mut()) {
+                if prev_sample_count == 0 {
+                    *accum = *current;
+                } else {
+                    *accum = *accum * blend_old_vec + *current * blend_new_vec;
+                }
+                *current = *accum;
+            }
+        });
+
+        self.temporal_sample_count = next_sample_count;
+        self.temporal_jitter_index = self.temporal_jitter_index.wrapping_add(1);
     }
 
     pub fn update_auto_exposure(&mut self, delta_time: f32) {

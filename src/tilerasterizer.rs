@@ -29,6 +29,7 @@ pub struct TileRasterizer {
     pub packets_translucent: BumpQueue<RasterPacket>,
     // Color and depth stored as 2x2 pixel quads
     pub color: Vec<Vec3x4>,
+    pub temporal_color: Vec<Vec3x4>,
     pub depth: Vec<Vec4>,
     // Internal "visibility-buffer" as 2x2 pixel quads
     pub packet_index: Vec<UVec4>,
