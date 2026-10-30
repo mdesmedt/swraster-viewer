@@ -23,8 +23,7 @@ target/
 # Ignore the glTF-Sample-Assets folder
 glTF-Sample-Assets/
 
-.devenv
-.pre-commit-config.yaml
-.devenv.flake.nix
 models
 assets/cubemap.ggx
+.direnv
+result
